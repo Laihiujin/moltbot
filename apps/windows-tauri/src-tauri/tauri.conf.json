@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self' asset: http://localhost:18789 ws://localhost:18789 'unsafe-inline' 'unsafe-eval' https: wss: data:"
     }
   },
   "bundle": {

@@ -2,13 +2,13 @@ name: Build Windows Tauri App
 
 on:
   push:
-    branches: [Siuyechu]
+    branches: [main, Siuyechu]
     paths:
       - "apps/windows-tauri/**"
       - "dist/**"
       - ".github/workflows/tauri-windows.yml"
   pull_request:
-    branches: [Siuyechu]
+    branches: [main, Siuyechu]
     paths:
       - "apps/windows-tauri/**"
   workflow_dispatch:
