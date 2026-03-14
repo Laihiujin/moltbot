@@ -1,0 +1,6 @@
+{
+  "identifier": "ai.openclaw.windows",
+  "bundle": {
+    "targets": ["nsis", "msi"]
+  }
+}

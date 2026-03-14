@@ -89,8 +89,18 @@ import { generateUUID } from "./uuid.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
 declare global {
+  type TauriInvoke = <T = unknown>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+
   interface Window {
     __OPENCLAW_CONTROL_UI_BASE_PATH__?: string;
+    __TAURI__?: {
+      core?: {
+        invoke?: TauriInvoke;
+      };
+    };
+    __TAURI_INTERNALS__?: {
+      invoke?: TauriInvoke;
+    };
   }
 }
 
@@ -109,6 +119,26 @@ function resolveOnboardingMode(): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
+function resolveTauriInvoke(): TauriInvoke | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const globalInvoke = window.__TAURI__?.core?.invoke;
+  if (typeof globalInvoke === "function") {
+    return globalInvoke;
+  }
+  const internalInvoke = window.__TAURI_INTERNALS__?.invoke;
+  if (typeof internalInvoke === "function") {
+    return internalInvoke;
+  }
+  return null;
+}
+
+type GatewayBootstrapResult = {
+  gateway_url: string;
+  token?: string | null;
+};
+
 @customElement("openclaw-app")
 export class OpenClawApp extends LitElement {
   private i18nController = new I18nController(this);
@@ -124,6 +154,8 @@ export class OpenClawApp extends LitElement {
   @state() password = "";
   @state() loginShowGatewayToken = false;
   @state() loginShowGatewayPassword = false;
+  @state() gatewayBootstrapBusy = false;
+  private desktopAutoBootstrapAttempted = false;
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
   @state() connected = false;
@@ -484,6 +516,21 @@ export class OpenClawApp extends LitElement {
 
   protected firstUpdated() {
     handleFirstUpdated(this as unknown as Parameters<typeof handleFirstUpdated>[0]);
+    if (this.desktopAutoBootstrapAttempted) {
+      return;
+    }
+    this.desktopAutoBootstrapAttempted = true;
+    if (!resolveTauriInvoke()) {
+      return;
+    }
+    // Desktop builds should auto-attempt local gateway bootstrap so users
+    // can get in without opening a terminal or clicking extra buttons.
+    window.setTimeout(() => {
+      if (this.connected || this.gatewayBootstrapBusy) {
+        return;
+      }
+      void this.bootstrapLocalGatewayAccess();
+    }, 150);
   }
 
   disconnectedCallback() {
@@ -498,6 +545,39 @@ export class OpenClawApp extends LitElement {
 
   connect() {
     connectGatewayInternal(this as unknown as Parameters<typeof connectGatewayInternal>[0]);
+  }
+
+  async bootstrapLocalGatewayAccess() {
+    if (this.gatewayBootstrapBusy) {
+      return;
+    }
+    const invoke = resolveTauriInvoke();
+    if (!invoke) {
+      this.lastError = "当前不是桌面版容器环境，无法自动拉起本地网关。";
+      return;
+    }
+    this.gatewayBootstrapBusy = true;
+    this.lastError = null;
+    this.lastErrorCode = null;
+    try {
+      const result = await invoke<GatewayBootstrapResult>("bootstrap_gateway_access");
+      const gatewayUrl = (result.gateway_url || "").trim() || "ws://127.0.0.1:18789";
+      const token = (result.token || "").trim();
+      applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
+        ...this.settings,
+        gatewayUrl,
+        token,
+      });
+      if (!token) {
+        this.lastError = "已启动网关，但未找到可用 token，请在配置里设置 gateway.auth.token。";
+        return;
+      }
+      this.connect();
+    } catch (err) {
+      this.lastError = `自动获取网关失败: ${String(err)}`;
+    } finally {
+      this.gatewayBootstrapBusy = false;
+    }
   }
 
   handleChatScroll(event: Event) {

@@ -98,6 +98,15 @@ export function renderLoginGate(state: AppViewState) {
             </div>
           </label>
           <button
+            class="btn login-gate__connect"
+            ?disabled=${state.gatewayBootstrapBusy}
+            @click=${() => {
+              void state.bootstrapLocalGatewayAccess();
+            }}
+          >
+            ${state.gatewayBootstrapBusy ? "正在启动网关..." : "一键启动并获取令牌"}
+          </button>
+          <button
             class="btn primary login-gate__connect"
             @click=${() => state.connect()}
           >

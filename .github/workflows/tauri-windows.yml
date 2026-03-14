@@ -2,15 +2,15 @@ name: Build Windows Tauri App
 
 on:
   push:
-    branches: [main, Siuyechu]
+    branches: ["**"]
     paths:
-      - "apps/windows-tauri/**"
+      - "apps/desktop-tauri/**"
       - "dist/**"
       - ".github/workflows/tauri-windows.yml"
   pull_request:
-    branches: [main, Siuyechu]
+    branches: ["**"]
     paths:
-      - "apps/windows-tauri/**"
+      - "apps/desktop-tauri/**"
   workflow_dispatch:
     inputs:
       release:
@@ -70,8 +70,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            apps/windows-tauri/src-tauri/target
-          key: cargo-windows-${{ hashFiles('apps/windows-tauri/src-tauri/Cargo.lock') }}
+            apps/desktop-tauri/src-tauri/target
+          key: cargo-windows-${{ hashFiles('apps/desktop-tauri/src-tauri/Cargo.lock') }}
           restore-keys: |
             cargo-windows-
 
@@ -83,27 +83,27 @@ jobs:
 
       - name: Install Tauri CLI (workspace)
         run: pnpm add -D @tauri-apps/cli
-        working-directory: apps/windows-tauri
+        working-directory: apps/desktop-tauri
 
       - name: Copy node.exe as gateway sidecar
         shell: pwsh
         run: |
           $nodePath = (Get-Command node).Source
-          New-Item -ItemType Directory -Force -Path "apps/windows-tauri/src-tauri/binaries"
-          Copy-Item $nodePath "apps/windows-tauri/src-tauri/binaries/gateway-x86_64-pc-windows-msvc.exe"
-          $size = (Get-Item "apps/windows-tauri/src-tauri/binaries/gateway-x86_64-pc-windows-msvc.exe").Length / 1MB
+          New-Item -ItemType Directory -Force -Path "apps/desktop-tauri/src-tauri/binaries"
+          Copy-Item $nodePath "apps/desktop-tauri/src-tauri/binaries/gateway-x86_64-pc-windows-msvc.exe"
+          $size = (Get-Item "apps/desktop-tauri/src-tauri/binaries/gateway-x86_64-pc-windows-msvc.exe").Length / 1MB
           Write-Host "Copied node.exe: $([math]::Round($size, 1)) MB"
 
       - name: Build Tauri Windows App
-        run: pnpm tauri build
-        working-directory: apps/windows-tauri
+        run: pnpm tauri build --config src-tauri/tauri.windows.conf.json
+        working-directory: apps/desktop-tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: List build outputs
         shell: pwsh
         run: |
-          Get-ChildItem apps/windows-tauri/src-tauri/target/release/bundle -Recurse -Include "*.exe","*.msi" |
+          Get-ChildItem apps/desktop-tauri/src-tauri/target/release/bundle -Recurse -Include "*.exe","*.msi" |
             Select-Object FullName, @{N="Size(MB)";E={[math]::Round($_.Length/1MB,1)}}
 
       # Upload artifacts for every build (PR or push)
@@ -111,14 +111,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OpenClaw-Windows-Setup-${{ github.sha }}
-          path: apps/windows-tauri/src-tauri/target/release/bundle/nsis/*.exe
+          path: apps/desktop-tauri/src-tauri/target/release/bundle/nsis/*.exe
           retention-days: 14
 
       - name: Upload Windows Installer (MSI)
         uses: actions/upload-artifact@v4
         with:
           name: OpenClaw-Windows-MSI-${{ github.sha }}
-          path: apps/windows-tauri/src-tauri/target/release/bundle/msi/*.msi
+          path: apps/desktop-tauri/src-tauri/target/release/bundle/msi/*.msi
           retention-days: 14
 
       # Create a GitHub Release on manual trigger or version tag
@@ -127,7 +127,7 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $json = Get-Content apps/windows-tauri/src-tauri/tauri.conf.json | ConvertFrom-Json
+          $json = Get-Content apps/desktop-tauri/src-tauri/tauri.conf.json | ConvertFrom-Json
           echo "version=$($json.version)" >> $env:GITHUB_OUTPUT
 
       - name: Create GitHub Release
@@ -153,8 +153,8 @@ jobs:
             ### 更新日志
             来自 commit ${{ github.sha }}
           files: |
-            apps/windows-tauri/src-tauri/target/release/bundle/nsis/*.exe
-            apps/windows-tauri/src-tauri/target/release/bundle/msi/*.msi
+            apps/desktop-tauri/src-tauri/target/release/bundle/nsis/*.exe
+            apps/desktop-tauri/src-tauri/target/release/bundle/msi/*.msi
           draft: false
           prerelease: true
         env:

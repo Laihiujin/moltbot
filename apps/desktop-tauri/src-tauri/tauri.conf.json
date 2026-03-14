@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "OpenClaw",
   "version": "0.1.0",
-  "identifier": "ai.openclaw.windows",
+  "identifier": "ai.openclaw.app",
   "build": {
     "frontendDist": "../../../dist/control-ui",
     "devUrl": "http://localhost:18789",
@@ -30,7 +30,6 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

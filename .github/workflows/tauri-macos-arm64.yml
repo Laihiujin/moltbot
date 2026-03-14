@@ -1,0 +1,147 @@
+name: Build macOS Tauri App (Apple Silicon)
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "apps/desktop-tauri/**"
+      - "dist/**"
+      - ".github/workflows/tauri-macos-arm64.yml"
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "apps/desktop-tauri/**"
+  workflow_dispatch:
+    inputs:
+      notarize:
+        description: "Notarize and staple macOS app/dmg (requires signing/notary secrets)"
+        required: false
+        default: "false"
+        type: boolean
+
+concurrency:
+  group: tauri-macos-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-tauri-macos-arm64:
+    name: Build Tauri macOS arm64
+    runs-on: macos-14
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10.23.0"
+          run_install: false
+
+      - name: Get pnpm store directory
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: pnpm-store-macos-arm64-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-macos-arm64-
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust / Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop-tauri/src-tauri/target
+          key: cargo-macos-arm64-${{ hashFiles('apps/desktop-tauri/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            cargo-macos-arm64-
+
+      - name: Install Node dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build Control UI
+        run: pnpm ui:build
+
+      - name: Install Tauri CLI (workspace)
+        run: pnpm add -D @tauri-apps/cli
+        working-directory: apps/desktop-tauri
+
+      - name: Copy node as gateway sidecar (arm64)
+        run: |
+          mkdir -p apps/desktop-tauri/src-tauri/binaries
+          cp "$(which node)" apps/desktop-tauri/src-tauri/binaries/gateway-aarch64-apple-darwin
+          chmod +x apps/desktop-tauri/src-tauri/binaries/gateway-aarch64-apple-darwin
+          ls -lh apps/desktop-tauri/src-tauri/binaries/gateway-aarch64-apple-darwin
+
+      - name: Build Tauri macOS App (arm64)
+        run: |
+          if [ -n "${{ secrets.APPLE_SIGNING_IDENTITY }}" ]; then
+            echo "Using Apple signing identity from secrets."
+            export APPLE_SIGNING_IDENTITY="${{ secrets.APPLE_SIGNING_IDENTITY }}"
+          else
+            echo "No APPLE_SIGNING_IDENTITY secret; building unsigned artifacts."
+            unset APPLE_SIGNING_IDENTITY
+          fi
+          pnpm tauri build --config src-tauri/tauri.macos.conf.json --target aarch64-apple-darwin
+        working-directory: apps/desktop-tauri
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Locate bundle artifacts
+        id: artifacts
+        run: |
+          APP_PATH="$(ls -1 apps/desktop-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app | head -n 1)"
+          DMG_PATH="$(ls -1 apps/desktop-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg | head -n 1)"
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+          echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
+          echo "App: $APP_PATH"
+          echo "DMG: $DMG_PATH"
+
+      - name: Notarize + staple (optional, release hardening)
+        if: github.event_name == 'workflow_dispatch' && inputs.notarize == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          : "${APPLE_ID:?Missing secret APPLE_ID}"
+          : "${APPLE_APP_SPECIFIC_PASSWORD:?Missing secret APPLE_APP_SPECIFIC_PASSWORD}"
+          : "${APPLE_TEAM_ID:?Missing secret APPLE_TEAM_ID}"
+          xcrun notarytool submit "${{ steps.artifacts.outputs.dmg_path }}" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "${{ steps.artifacts.outputs.app_path }}"
+          xcrun stapler staple "${{ steps.artifacts.outputs.dmg_path }}"
+          spctl --assess --type open --context context:primary-signature --verbose "${{ steps.artifacts.outputs.app_path }}"
+
+      - name: Upload macOS App bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenClaw-macOS-arm64-app-${{ github.sha }}
+          path: ${{ steps.artifacts.outputs.app_path }}
+          retention-days: 14
+
+      - name: Upload macOS Installer (DMG)
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenClaw-macOS-arm64-dmg-${{ github.sha }}
+          path: ${{ steps.artifacts.outputs.dmg_path }}
+          retention-days: 14
