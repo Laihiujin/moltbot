@@ -7,7 +7,7 @@
     "frontendDist": "../../../dist/control-ui",
     "devUrl": "http://localhost:18789",
     "beforeDevCommand": "",
-    "beforeBuildCommand": ""
+    "beforeBuildCommand": "node ./scripts/prepare-runtime.mjs"
   },
   "app": {
     "windows": [
@@ -21,11 +21,11 @@
         "fullscreen": false,
         "center": true,
         "decorations": true,
-        "url": "http://localhost:18789"
+        "url": "index.html"
       }
     ],
     "security": {
-      "csp": "default-src 'self' asset: http://localhost:18789 ws://localhost:18789 'unsafe-inline' 'unsafe-eval' https: wss: data:"
+      "csp": "default-src 'self' asset: http://localhost:18789 http://127.0.0.1:18789 ws://localhost:18789 ws://127.0.0.1:18789 'unsafe-inline' 'unsafe-eval' https: wss: data:"
     }
   },
   "bundle": {
@@ -37,12 +37,14 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "../../../dist/**/*",
-      "../onboard.html"
-    ],
+    "resources": {
+      "../onboard.html": "onboard.html",
+      "runtime/openclaw/dist/": "dist/",
+      "runtime/openclaw/node_modules/": "node_modules/",
+      "runtime/openclaw/docs/reference/templates/": "docs/reference/templates/"
+    },
     "externalBin": [
-      "binaries/gateway"
+      "binaries/node"
     ]
   }
 }

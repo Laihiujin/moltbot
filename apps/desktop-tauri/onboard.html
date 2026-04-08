@@ -575,8 +575,12 @@
 
   function buildConfig() {
     const cfg = {
-      gateway: { port: 18789, bind: 'lan', mode: 'local' },
-      auth: { mode: 'token', token: randomToken() },
+      gateway: {
+        port: 18789,
+        bind: 'loopback',
+        mode: 'local',
+        auth: { mode: 'token', token: randomToken() },
+      },
       agents: {},
     };
 

@@ -3733,11 +3733,36 @@
 .ov-access-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
 
 .ov-access-grid__full {
   grid-column: 1 / -1;
+}
+
+.ov-access-secret-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.ov-access-secret-row__input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ov-access-secret-row__toggle {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+}
+
+@media (max-width: 1200px) {
+  .ov-access-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* Bottom grid (event log + log tail) */

@@ -83,10 +83,17 @@ apps/ios/*.mobileprovision
 .local/
 docs/.local/
 tmp/
+.tmp-*/
 IDENTITY.md
 USER.md
 .tgz
 .idea
+
+# Desktop Tauri build artifacts
+apps/desktop-tauri/src-tauri/target/
+apps/desktop-tauri/src-tauri/runtime/
+apps/desktop-tauri/src-tauri/binaries/
+apps/desktop-tauri/src-tauri/gen/
 
 # local tooling
 .serena/
