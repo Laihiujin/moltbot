@@ -5,7 +5,26 @@ packages:
   - extensions/*
   - apps/*
 
+minimumReleaseAge: 2880
+
+minimumReleaseAgeExclude:
+  - "acpx"
+  - "basic-ftp"
+  - "hono"
+  - "openclaw"
+  - "@buape/carbon"
+  - "vite"
+  - "@cloudflare/workers-types"
+  - "@hono/node-server"
+  - "@mariozechner/*"
+  - "@typescript/native-preview*"
+  - "@oxlint/*"
+  - "@oxfmt/*"
+  - "sqlite-vec"
+  - "sqlite-vec-*"
+
 onlyBuiltDependencies:
+  - "@discordjs/opus"
   - "@lydell/node-pty"
   - "@matrix-org/matrix-sdk-crypto-nodejs"
   - "@napi-rs/canvas"
@@ -16,3 +35,6 @@ onlyBuiltDependencies:
   - node-llama-cpp
   - protobufjs
   - sharp
+
+ignoredBuiltDependencies:
+  - koffi

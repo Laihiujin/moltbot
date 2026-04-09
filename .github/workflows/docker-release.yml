@@ -2,8 +2,6 @@ name: Docker Release
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*"
     paths-ignore:
@@ -15,12 +13,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to backfill (for example v2026.3.13)
+        description: Existing release tag to backfill (for example v2026.3.22)
         required: true
         type: string
 
 concurrency:
-  group: docker-release-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  group: ${{ github.event_name == 'workflow_dispatch' && format('docker-release-manual-{0}', inputs.tag) || format('docker-release-push-{0}', github.run_id) }}
   cancel-in-progress: false
 
 env:
@@ -59,7 +57,9 @@ jobs:
     environment: docker-release
     steps:
       - name: Approve Docker backfill
-        run: echo "Approved Docker backfill for ${{ inputs.tag }}"
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: echo "Approved Docker backfill for $RELEASE_TAG"
 
   # KEEP THIS WORKFLOW ON GITHUB-HOSTED RUNNERS.
   # DO NOT MOVE IT BACK TO BLACKSMITH WITHOUT RE-VALIDATING TAG BUILDS AND BACKFILLS.
@@ -157,6 +157,8 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          cache-from: type=gha,scope=docker-release-amd64
+          cache-to: type=gha,mode=max,scope=docker-release-amd64
           tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.labels.outputs.value }}
           provenance: false
@@ -169,6 +171,8 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          cache-from: type=gha,scope=docker-release-amd64
+          cache-to: type=gha,mode=max,scope=docker-release-amd64
           build-args: |
             OPENCLAW_VARIANT=slim
           tags: ${{ steps.tags.outputs.slim }}
@@ -270,6 +274,8 @@ jobs:
         with:
           context: .
           platforms: linux/arm64
+          cache-from: type=gha,scope=docker-release-arm64
+          cache-to: type=gha,mode=max,scope=docker-release-arm64
           tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.labels.outputs.value }}
           provenance: false
@@ -282,6 +288,8 @@ jobs:
         with:
           context: .
           platforms: linux/arm64
+          cache-from: type=gha,scope=docker-release-arm64
+          cache-to: type=gha,mode=max,scope=docker-release-arm64
           build-args: |
             OPENCLAW_VARIANT=slim
           tags: ${{ steps.tags.outputs.slim }}
