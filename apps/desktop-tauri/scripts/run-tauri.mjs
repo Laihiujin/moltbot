@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,6 +21,7 @@ function runOrThrow(command, args, cwd) {
 function main() {
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const desktopTauriDir = resolve(scriptDir, "..");
+  const desktopRequire = createRequire(resolve(desktopTauriDir, "package.json"));
   const args = process.argv.slice(2);
   const firstArg = args[0] ?? "";
 
@@ -28,13 +30,7 @@ function main() {
     runOrThrow(process.execPath, [resolve(scriptDir, "bump-desktop-version.mjs")], desktopTauriDir);
   }
 
-  const tauriEntrypoint = resolve(
-    desktopTauriDir,
-    "node_modules",
-    "@tauri-apps",
-    "cli",
-    "tauri.js",
-  );
+  const tauriEntrypoint = desktopRequire.resolve("@tauri-apps/cli/tauri.js");
   runOrThrow(process.execPath, [tauriEntrypoint, ...args], desktopTauriDir);
 }
 
