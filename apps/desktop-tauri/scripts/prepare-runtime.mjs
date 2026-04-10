@@ -2,6 +2,7 @@ import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import * as tar from "tar";
 
 function runOrThrow(command, args, cwd, useShell = false) {
   const result = spawnSync(command, args, {
@@ -39,7 +40,7 @@ function safeRm(path) {
   }
 }
 
-function main() {
+async function main() {
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const desktopTauriDir = resolve(scriptDir, "..");
   const desktopTauriSrcTauriDir = resolve(desktopTauriDir, "src-tauri");
@@ -54,10 +55,15 @@ function main() {
 
   const runtimeRoot = join(desktopTauriSrcTauriDir, "runtime");
   const runtimeOpenclawDir = join(runtimeRoot, "openclaw");
+  const runtimeArchivePath = join(runtimeRoot, "openclaw-runtime.tar.gz");
   const runtimeTemplatesDir = join(runtimeOpenclawDir, "docs", "reference", "templates");
+
   mkdirSync(runtimeOpenclawDir, { recursive: true });
   safeRm(join(runtimeOpenclawDir, "dist"));
   safeRm(runtimeTemplatesDir);
+  safeRm(join(runtimeOpenclawDir, "node_modules"));
+  safeRm(join(runtimeOpenclawDir, "package-lock.json"));
+  safeRm(runtimeArchivePath);
 
   cpSync(join(repoRoot, "package.json"), join(runtimeOpenclawDir, "package.json"));
   cpSync(distDir, join(runtimeOpenclawDir, "dist"), { recursive: true });
@@ -81,6 +87,16 @@ function main() {
       runtimeOpenclawDir,
     );
   }
+
+  await tar.c(
+    {
+      cwd: runtimeOpenclawDir,
+      file: runtimeArchivePath,
+      gzip: true,
+      portable: true,
+    },
+    ["package.json", "dist", "node_modules", "docs"],
+  );
 }
 
-main();
+await main();

@@ -1,6 +1,31 @@
 {
   "identifier": "ai.openclaw.windows",
   "bundle": {
-    "targets": ["nsis", "msi"]
+    "targets": ["nsis", "msi"],
+    "windows": {
+      "signCommand": {
+        "cmd": "node",
+        "args": [
+          "../scripts/sign-windows-binary.mjs",
+          "%1"
+        ]
+      },
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "template": "installer/windows/nsis/installer.nsi",
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "installer/windows/assets/nsis-header.bmp",
+        "sidebarImage": "installer/windows/assets/nsis-sidebar.bmp"
+      },
+      "wix": {
+        "upgradeCode": "50575375-f12c-5d45-8d73-252fda29b32d",
+        "bannerPath": "installer/windows/assets/wix-banner.bmp",
+        "dialogImagePath": "installer/windows/assets/wix-dialog.bmp"
+      }
+    }
   }
 }

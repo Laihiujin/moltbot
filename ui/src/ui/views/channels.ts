@@ -23,8 +23,11 @@ import { renderNostrCard } from "./channels.nostr.ts";
 import {
   channelEnabled,
   formatNullableBoolean,
+  isChannelCollapsed,
+  renderCollapsibleChannelCard,
   renderChannelAccountCount,
   resolveChannelDisplayState,
+  toggleChannelCollapsed,
 } from "./channels.shared.ts";
 import { renderSignalCard } from "./channels.signal.ts";
 import { renderSlackCard } from "./channels.slack.ts";
@@ -195,37 +198,41 @@ function renderGenericChannelCard(
   const accountCountLabel = renderChannelAccountCount(key, channelAccounts);
 
   return html`
-    <div class="card">
-      <div class="card-title">${label}</div>
-      <div class="card-sub">${t("channels.generic.subtitle")}</div>
-      ${accountCountLabel}
-      ${accounts.length > 0
-        ? html`
-            <div class="account-card-list">
-              ${accounts.map((account) => renderGenericAccount(account))}
-            </div>
-          `
-        : html`
-            <div class="status-list" style="margin-top: 16px;">
-              <div>
-                <span class="label">${t("common.configured")}</span>
-                <span>${formatNullableBoolean(displayState.configured)}</span>
+    ${renderCollapsibleChannelCard({
+      title: label,
+      subtitle: t("channels.generic.subtitle"),
+      collapsed: isChannelCollapsed(key, props),
+      onToggleCollapsed: toggleChannelCollapsed(key, props),
+      body: html`
+        ${accountCountLabel}
+        ${accounts.length > 0
+          ? html`
+              <div class="account-card-list">
+                ${accounts.map((account) => renderGenericAccount(account))}
               </div>
-              <div>
-                <span class="label">${t("common.running")}</span>
-                <span>${formatNullableBoolean(displayState.running)}</span>
+            `
+          : html`
+              <div class="status-list" style="margin-top: 16px;">
+                <div>
+                  <span class="label">${t("common.configured")}</span>
+                  <span>${formatNullableBoolean(displayState.configured)}</span>
+                </div>
+                <div>
+                  <span class="label">${t("common.running")}</span>
+                  <span>${formatNullableBoolean(displayState.running)}</span>
+                </div>
+                <div>
+                  <span class="label">${t("common.connected")}</span>
+                  <span>${formatNullableBoolean(displayState.connected)}</span>
+                </div>
               </div>
-              <div>
-                <span class="label">${t("common.connected")}</span>
-                <span>${formatNullableBoolean(displayState.connected)}</span>
-              </div>
-            </div>
-          `}
-      ${lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">${lastError}</div>`
-        : nothing}
-      ${renderChannelConfigSection({ channelId: key, props })}
-    </div>
+            `}
+        ${lastError
+          ? html`<div class="callout danger" style="margin-top: 12px;">${lastError}</div>`
+          : nothing}
+        ${renderChannelConfigSection({ channelId: key, props })}
+      `,
+    })}
   `;
 }
 

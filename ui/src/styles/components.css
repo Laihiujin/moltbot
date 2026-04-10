@@ -253,6 +253,49 @@
   line-height: 1.5;
 }
 
+.channel-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.channel-card__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  width: 100%;
+  padding: 18px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.channel-card__header:hover {
+  background: var(--card-highlight);
+}
+
+.channel-card__header:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.channel-card__header-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.channel-card__body {
+  padding: 0 18px 18px;
+}
+
+.channel-card__header .collapse-chevron {
+  margin-top: 2px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
 /* ===========================================
    Stats - Bold values, subtle labels
    =========================================== */

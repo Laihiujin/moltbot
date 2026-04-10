@@ -24,6 +24,8 @@ type LifecycleHost = {
   client?: { stop: () => void } | null;
   connectGeneration: number;
   connected?: boolean;
+  settings?: import("./storage.ts").UiSettings;
+  applySettings?: (next: import("./storage.ts").UiSettings) => void;
   tab: Tab;
   assistantName: string;
   assistantAvatar: string | null;

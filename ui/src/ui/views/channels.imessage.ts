@@ -5,8 +5,10 @@ import type { IMessageStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   formatNullableBoolean,
+  isChannelCollapsed,
   renderSingleAccountChannelCard,
   resolveChannelConfigured,
+  toggleChannelCollapsed,
 } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
@@ -19,6 +21,8 @@ export function renderIMessageCard(params: {
   const configured = resolveChannelConfigured("imessage", props);
 
   return renderSingleAccountChannelCard({
+    collapsed: isChannelCollapsed("imessage", props),
+    onToggleCollapsed: toggleChannelCollapsed("imessage", props),
     title: "iMessage",
     subtitle: "macOS bridge status and channel configuration.",
     accountCountLabel,

@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { icons } from "../icons.ts";
 import type { ChannelAccountSnapshot } from "../types.ts";
 import type { ChannelKey, ChannelsProps } from "./channels.types.ts";
 
@@ -93,7 +94,48 @@ export function formatNullableBoolean(value: boolean | null): string {
   return value ? t("common.yes") : t("common.no");
 }
 
+export function isChannelCollapsed(key: ChannelKey, props: ChannelsProps): boolean {
+  return !props.expandedChannelIds.has(key);
+}
+
+export function toggleChannelCollapsed(key: ChannelKey, props: ChannelsProps): () => void {
+  return () => props.onToggleChannelExpanded(key);
+}
+
+export function renderCollapsibleChannelCard(params: {
+  title: string;
+  subtitle: string;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
+  body: unknown;
+}) {
+  return html`
+    <div class="card channel-card ${params.collapsed ? "channel-card--collapsed" : ""}">
+      <button
+        type="button"
+        class="channel-card__header"
+        aria-expanded=${String(!params.collapsed)}
+        @click=${params.onToggleCollapsed}
+      >
+        <div class="channel-card__header-copy">
+          <div class="card-title">${params.title}</div>
+          <div class="card-sub">${params.subtitle}</div>
+        </div>
+        <span
+          class="collapse-chevron ${params.collapsed ? "collapse-chevron--collapsed" : ""}"
+          aria-hidden="true"
+        >
+          ${icons.chevronDown}
+        </span>
+      </button>
+      ${params.collapsed ? nothing : html`<div class="channel-card__body">${params.body}</div>`}
+    </div>
+  `;
+}
+
 export function renderSingleAccountChannelCard(params: {
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
   title: string;
   subtitle: string;
   accountCountLabel: unknown;
@@ -104,10 +146,12 @@ export function renderSingleAccountChannelCard(params: {
   configSection: unknown;
   footer?: unknown;
 }) {
-  return html`
-    <div class="card">
-      <div class="card-title">${params.title}</div>
-      <div class="card-sub">${params.subtitle}</div>
+  return renderCollapsibleChannelCard({
+    title: params.title,
+    subtitle: params.subtitle,
+    collapsed: params.collapsed,
+    onToggleCollapsed: params.onToggleCollapsed,
+    body: html`
       ${params.accountCountLabel}
 
       <div class="status-list" style="margin-top: 16px;">
@@ -126,8 +170,8 @@ export function renderSingleAccountChannelCard(params: {
         : nothing}
       ${params.secondaryCallout ?? nothing} ${params.extraContent ?? nothing}
       ${params.configSection} ${params.footer ?? nothing}
-    </div>
-  `;
+    `,
+  });
 }
 
 export function getChannelAccountCount(

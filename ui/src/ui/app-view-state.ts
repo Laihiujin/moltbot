@@ -159,6 +159,7 @@ export type AppViewState = {
   channelsSnapshot: ChannelsStatusSnapshot | null;
   channelsError: string | null;
   channelsLastSuccess: number | null;
+  expandedChannelIds: ReadonlySet<string>;
   whatsappLoginMessage: string | null;
   whatsappLoginQrDataUrl: string | null;
   whatsappLoginConnected: boolean | null;
@@ -356,6 +357,7 @@ export type AppViewState = {
     handleWhatsAppStart: (force: boolean) => Promise<void>;
     handleWhatsAppWait: () => Promise<void>;
     handleWhatsAppLogout: () => Promise<void>;
+    handleToggleChannelExpanded: (channelId: string) => void;
     handleChannelConfigSave: () => Promise<void>;
     handleChannelConfigReload: () => Promise<void>;
     handleNostrProfileEdit: (accountId: string, profile: NostrProfile | null) => void;

@@ -4,6 +4,7 @@ import {
 } from "../../../../src/gateway/control-ui-contract.js";
 import { normalizeAssistantIdentity } from "../assistant-identity.ts";
 import { normalizeBasePath } from "../navigation.ts";
+import type { UiSettings } from "../storage.ts";
 
 export type ControlUiBootstrapState = {
   basePath: string;
@@ -11,12 +12,73 @@ export type ControlUiBootstrapState = {
   assistantAvatar: string | null;
   assistantAgentId: string | null;
   serverVersion: string | null;
+  settings?: UiSettings;
+  applySettings?: (next: UiSettings) => void;
 };
+
+type TauriBootstrapAccess = {
+  gateway_url?: string;
+  token?: string | null;
+};
+
+type TauriInvoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+
+declare global {
+  interface Window {
+    __TAURI_INTERNALS__?: {
+      invoke?: TauriInvoke;
+    };
+  }
+}
+
+function resolveTauriInvoke(): TauriInvoke | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const invoke = window.__TAURI_INTERNALS__?.invoke;
+  return typeof invoke === "function" ? invoke : null;
+}
+
+function isTauriDesktopHost(): boolean {
+  if (typeof location === "undefined") {
+    return false;
+  }
+  return location.hostname === "tauri.localhost";
+}
+
+async function loadDesktopGatewayBootstrap(state: ControlUiBootstrapState) {
+  if (!isTauriDesktopHost()) {
+    return;
+  }
+  const invoke = resolveTauriInvoke();
+  if (!invoke) {
+    return;
+  }
+  try {
+    const result = (await invoke("bootstrap_gateway_access")) as TauriBootstrapAccess;
+    const gatewayUrl =
+      typeof result.gateway_url === "string" && result.gateway_url.trim()
+        ? result.gateway_url.trim()
+        : "ws://127.0.0.1:18789";
+    const token = typeof result.token === "string" ? result.token : "";
+    if (state.settings) {
+      const nextSettings = { ...state.settings, gatewayUrl, token };
+      if (typeof state.applySettings === "function") {
+        state.applySettings(nextSettings);
+      } else {
+        state.settings = nextSettings;
+      }
+    }
+  } catch {
+    // Ignore desktop bootstrap failures and fall back to the normal login gate.
+  }
+}
 
 export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapState) {
   if (typeof window === "undefined") {
     return;
   }
+  await loadDesktopGatewayBootstrap(state);
   if (typeof fetch !== "function") {
     return;
   }

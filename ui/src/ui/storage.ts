@@ -72,6 +72,13 @@ function formatHostWithPort(hostname: string, port: string): string {
   return `${normalizedHost}:${port}`;
 }
 
+function isTauriDesktopHost(): boolean {
+  if (typeof location === "undefined") {
+    return false;
+  }
+  return location.hostname === "tauri.localhost";
+}
+
 function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const configured =
@@ -81,6 +88,12 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
     ? normalizeBasePath(configured)
     : inferBasePathFromPathname(location.pathname);
   const pageUrl = `${proto}://${location.host}${basePath}`;
+  if (isTauriDesktopHost()) {
+    return {
+      pageUrl,
+      effectiveUrl: `${proto}://${formatHostWithPort("127.0.0.1", "18789")}`,
+    };
+  }
   if (!isViteDevPage()) {
     return { pageUrl, effectiveUrl: pageUrl };
   }

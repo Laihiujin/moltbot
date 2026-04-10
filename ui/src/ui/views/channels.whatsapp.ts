@@ -5,8 +5,10 @@ import type { WhatsAppStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   formatNullableBoolean,
+  isChannelCollapsed,
   renderSingleAccountChannelCard,
   resolveChannelConfigured,
+  toggleChannelCollapsed,
 } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
@@ -19,6 +21,8 @@ export function renderWhatsAppCard(params: {
   const configured = resolveChannelConfigured("whatsapp", props);
 
   return renderSingleAccountChannelCard({
+    collapsed: isChannelCollapsed("whatsapp", props),
+    onToggleCollapsed: toggleChannelCollapsed("whatsapp", props),
     title: "WhatsApp",
     subtitle: "Link WhatsApp Web and monitor connection health.",
     accountCountLabel,

@@ -4,15 +4,17 @@ import { formatRelativeTimestamp } from "../format.ts";
 import type { ChannelAccountSnapshot, NostrStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
+  isChannelCollapsed,
+  renderCollapsibleChannelCard,
+  toggleChannelCollapsed,
+} from "./channels.shared.ts";
+import {
   renderNostrProfileForm,
-  type NostrProfileFormState,
   type NostrProfileFormCallbacks,
+  type NostrProfileFormState,
 } from "./channels.nostr-profile-form.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
-/**
- * Truncate a pubkey for display (shows first and last 8 chars)
- */
 function truncatePubkey(pubkey: string | null | undefined): string {
   if (!pubkey) {
     return t("common.na");
@@ -28,11 +30,8 @@ export function renderNostrCard(params: {
   nostr?: NostrStatus | null;
   nostrAccounts: ChannelAccountSnapshot[];
   accountCountLabel: unknown;
-  /** Profile form state (optional - if provided, shows form) */
   profileFormState?: NostrProfileFormState | null;
-  /** Profile form callbacks */
   profileFormCallbacks?: NostrProfileFormCallbacks | null;
-  /** Called when Edit Profile is clicked */
   onEditProfile?: () => void;
 }) {
   const {
@@ -95,7 +94,6 @@ export function renderNostrCard(params: {
   };
 
   const renderProfileSection = () => {
-    // If showing form, render the form instead of the read-only view
     if (showingForm && profileFormCallbacks) {
       return renderNostrProfileForm({
         state: profileFormState,
@@ -191,10 +189,12 @@ export function renderNostrCard(params: {
     `;
   };
 
-  return html`
-    <div class="card">
-      <div class="card-title">Nostr</div>
-      <div class="card-sub">Decentralized DMs via Nostr relays (NIP-04).</div>
+  return renderCollapsibleChannelCard({
+    title: "Nostr",
+    subtitle: "Decentralized DMs via Nostr relays (NIP-04).",
+    collapsed: isChannelCollapsed("nostr", props),
+    onToggleCollapsed: toggleChannelCollapsed("nostr", props),
+    body: html`
       ${accountCountLabel}
       ${hasMultipleAccounts
         ? html`
@@ -236,6 +236,6 @@ export function renderNostrCard(params: {
       <div class="row" style="margin-top: 12px;">
         <button class="btn" @click=${() => props.onRefresh(false)}>${t("common.refresh")}</button>
       </div>
-    </div>
-  `;
+    `,
+  });
 }

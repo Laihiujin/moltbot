@@ -5,8 +5,10 @@ import type { SignalStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   formatNullableBoolean,
+  isChannelCollapsed,
   renderSingleAccountChannelCard,
   resolveChannelConfigured,
+  toggleChannelCollapsed,
 } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
@@ -19,6 +21,8 @@ export function renderSignalCard(params: {
   const configured = resolveChannelConfigured("signal", props);
 
   return renderSingleAccountChannelCard({
+    collapsed: isChannelCollapsed("signal", props),
+    onToggleCollapsed: toggleChannelCollapsed("signal", props),
     title: "Signal",
     subtitle: "signal-cli status and channel configuration.",
     accountCountLabel,

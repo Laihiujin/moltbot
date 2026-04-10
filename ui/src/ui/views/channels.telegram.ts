@@ -5,8 +5,11 @@ import type { ChannelAccountSnapshot, TelegramStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   formatNullableBoolean,
+  isChannelCollapsed,
+  renderCollapsibleChannelCard,
   renderSingleAccountChannelCard,
   resolveChannelConfigured,
+  toggleChannelCollapsed,
 } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
@@ -56,10 +59,12 @@ export function renderTelegramCard(params: {
   };
 
   if (hasMultipleAccounts) {
-    return html`
-      <div class="card">
-        <div class="card-title">Telegram</div>
-        <div class="card-sub">Bot status and channel configuration.</div>
+    return renderCollapsibleChannelCard({
+      title: "Telegram",
+      subtitle: "Bot status and channel configuration.",
+      collapsed: isChannelCollapsed("telegram", props),
+      onToggleCollapsed: toggleChannelCollapsed("telegram", props),
+      body: html`
         ${accountCountLabel}
 
         <div class="account-card-list">
@@ -71,7 +76,7 @@ export function renderTelegramCard(params: {
           : nothing}
         ${telegram?.probe
           ? html`<div class="callout" style="margin-top: 12px;">
-              ${telegram.probe.ok ? t("common.probeOk") : t("common.probeFailed")} ·
+              ${telegram.probe.ok ? t("common.probeOk") : t("common.probeFailed")} 路
               ${telegram.probe.status ?? ""} ${telegram.probe.error ?? ""}
             </div>`
           : nothing}
@@ -80,11 +85,13 @@ export function renderTelegramCard(params: {
         <div class="row" style="margin-top: 12px;">
           <button class="btn" @click=${() => props.onRefresh(true)}>${t("common.probe")}</button>
         </div>
-      </div>
-    `;
+      `,
+    });
   }
 
   return renderSingleAccountChannelCard({
+    collapsed: isChannelCollapsed("telegram", props),
+    onToggleCollapsed: toggleChannelCollapsed("telegram", props),
     title: "Telegram",
     subtitle: "Bot status and channel configuration.",
     accountCountLabel,
@@ -108,7 +115,7 @@ export function renderTelegramCard(params: {
     lastError: telegram?.lastError,
     secondaryCallout: telegram?.probe
       ? html`<div class="callout" style="margin-top: 12px;">
-          ${telegram.probe.ok ? t("common.probeOk") : t("common.probeFailed")} ·
+          ${telegram.probe.ok ? t("common.probeOk") : t("common.probeFailed")} 路
           ${telegram.probe.status ?? ""} ${telegram.probe.error ?? ""}
         </div>`
       : nothing,

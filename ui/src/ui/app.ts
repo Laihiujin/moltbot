@@ -260,6 +260,7 @@ export class OpenClawApp extends LitElement {
   @state() channelsSnapshot: ChannelsStatusSnapshot | null = null;
   @state() channelsError: string | null = null;
   @state() channelsLastSuccess: number | null = null;
+  @state() expandedChannelIds: Set<string> = new Set();
   @state() whatsappLoginMessage: string | null = null;
   @state() whatsappLoginQrDataUrl: string | null = null;
   @state() whatsappLoginConnected: boolean | null = null;
@@ -685,6 +686,16 @@ export class OpenClawApp extends LitElement {
 
   async handleChannelConfigReload() {
     await handleChannelConfigReloadInternal(this);
+  }
+
+  handleToggleChannelExpanded(channelId: string) {
+    const next = new Set(this.expandedChannelIds);
+    if (next.has(channelId)) {
+      next.delete(channelId);
+    } else {
+      next.add(channelId);
+    }
+    this.expandedChannelIds = next;
   }
 
   handleNostrProfileEdit(accountId: string, profile: NostrProfile | null) {

@@ -5,8 +5,10 @@ import type { SlackStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   formatNullableBoolean,
+  isChannelCollapsed,
   renderSingleAccountChannelCard,
   resolveChannelConfigured,
+  toggleChannelCollapsed,
 } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
@@ -19,6 +21,8 @@ export function renderSlackCard(params: {
   const configured = resolveChannelConfigured("slack", props);
 
   return renderSingleAccountChannelCard({
+    collapsed: isChannelCollapsed("slack", props),
+    onToggleCollapsed: toggleChannelCollapsed("slack", props),
     title: "Slack",
     subtitle: "Socket mode status and channel configuration.",
     accountCountLabel,

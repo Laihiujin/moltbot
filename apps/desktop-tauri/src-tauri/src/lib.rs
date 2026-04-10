@@ -1,12 +1,22 @@
+use flate2::read::GzDecoder;
 use serde::Serialize;
+use std::fs::{self, File};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use tar::Archive;
+use tauri::menu::MenuBuilder;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
 type GatewayChild = Arc<Mutex<Option<CommandChild>>>;
-struct GatewayState(GatewayChild);
+type QuitFlag = Arc<Mutex<bool>>;
+
+struct DesktopState {
+    gateway: GatewayChild,
+    quitting: QuitFlag,
+}
 
 #[derive(Serialize)]
 struct GatewayBootstrap {
@@ -70,9 +80,9 @@ fn open_control_ui(window: tauri::WebviewWindow) -> Result<(), String> {
 #[tauri::command]
 fn bootstrap_gateway_access(
     app: tauri::AppHandle,
-    state: tauri::State<'_, GatewayState>,
+    state: tauri::State<'_, DesktopState>,
 ) -> Result<GatewayBootstrap, String> {
-    ensure_gateway_running(&app, state.inner().0.clone())?;
+    ensure_gateway_running(&app, state.gateway.clone())?;
     Ok(GatewayBootstrap {
         gateway_url: "ws://127.0.0.1:18789".to_string(),
         token: read_gateway_token_from_config(),
@@ -202,36 +212,77 @@ fn maybe_migrate_config_file() -> Result<bool, String> {
     Ok(true)
 }
 
+fn runtime_cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    if let Ok(path) = app.path().app_local_data_dir() {
+        return Ok(path.join("runtime").join(env!("CARGO_PKG_VERSION")));
+    }
+    Ok(resolve_home_dir()
+        .join(".openclaw-desktop")
+        .join("runtime")
+        .join(env!("CARGO_PKG_VERSION")))
+}
+
+fn ensure_bundled_runtime_ready(
+    app: &tauri::AppHandle,
+    archive_path: &PathBuf,
+) -> Result<PathBuf, String> {
+    let runtime_dir = runtime_cache_dir(app)?;
+    let ready_marker = runtime_dir.join(".runtime-ready");
+    let index_js = runtime_dir.join("dist").join("index.js");
+    if ready_marker.exists() && index_js.exists() {
+        return Ok(runtime_dir);
+    }
+
+    if runtime_dir.exists() {
+        fs::remove_dir_all(&runtime_dir).map_err(|e| e.to_string())?;
+    }
+    fs::create_dir_all(&runtime_dir).map_err(|e| e.to_string())?;
+
+    let archive_file = File::open(archive_path).map_err(|e| e.to_string())?;
+    let decoder = GzDecoder::new(archive_file);
+    let mut archive = Archive::new(decoder);
+    archive.unpack(&runtime_dir).map_err(|e| e.to_string())?;
+    fs::write(&ready_marker, env!("CARGO_PKG_VERSION")).map_err(|e| e.to_string())?;
+
+    Ok(runtime_dir)
+}
+
+fn resolve_gateway_runtime_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
+    let bundled_archive = resource_dir.join("openclaw-runtime.tar.gz");
+    if bundled_archive.exists() {
+        return ensure_bundled_runtime_ready(app, &bundled_archive);
+    }
+
+    let dev_index_js = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../dist")
+        .join("index.js");
+    if dev_index_js.exists() {
+        return dev_index_js
+            .parent()
+            .and_then(|p| p.parent())
+            .map(PathBuf::from)
+            .ok_or_else(|| "Unable to resolve gateway runtime directory".to_string());
+    }
+
+    Err("Gateway runtime archive not found in app resources".to_string())
+}
+
 fn ensure_gateway_running(app: &tauri::AppHandle, child_arc: GatewayChild) -> Result<(), String> {
     if child_arc.lock().map_err(|e| e.to_string())?.is_some() {
         return Ok(());
     }
-    let bundled_index_js = app
-        .path()
-        .resource_dir()
-        .map_err(|e| e.to_string())?
-        .join("dist")
-        .join("index.js");
-    let dev_index_js = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../dist")
-        .join("index.js");
-    let index_js = if bundled_index_js.exists() {
-        bundled_index_js
-    } else if dev_index_js.exists() {
-        dev_index_js
-    } else {
-        return Err("Gateway index.js not found in app resources".to_string());
-    };
-    let runtime_dir = index_js
-        .parent()
-        .and_then(|p| p.parent())
-        .ok_or_else(|| "Unable to resolve gateway runtime directory".to_string())?;
+    let runtime_dir = resolve_gateway_runtime_dir(app)?;
+    let index_js = runtime_dir.join("dist").join("index.js");
+    if !index_js.exists() {
+        return Err("Gateway index.js not found in runtime directory".to_string());
+    }
     let sidecar = app
         .shell()
         .sidecar("node")
         .map_err(|e| format!("Gateway sidecar unavailable: {e}"))?;
     let (rx, proc) = sidecar
-        .current_dir(runtime_dir)
+        .current_dir(&runtime_dir)
         .args([
             "dist/index.js",
             "gateway",
@@ -291,15 +342,42 @@ fn ensure_gateway_running(app: &tauri::AppHandle, child_arc: GatewayChild) -> Re
     Ok(())
 }
 
+fn stop_gateway_process(child_arc: GatewayChild) {
+    if let Ok(mut guard) = child_arc.lock() {
+        if let Some(proc) = guard.take() {
+            log::info!("Stopping gateway...");
+            let _ = proc.kill();
+        }
+    }
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn request_app_exit(app: &tauri::AppHandle) {
+    {
+        let state = app.state::<DesktopState>();
+        if let Ok(mut quitting) = state.quitting.lock() {
+            *quitting = true;
+        }
+        stop_gateway_process(state.gateway.clone());
+    }
+    app.exit(0);
+}
+
 // ──────────────────────────────────────────
 // Entry point
 // ──────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Create gateway child Arc before Builder so on_window_event can own a clone
     let child: GatewayChild = Arc::new(Mutex::new(None));
-    let child_for_event = child.clone();
+    let quitting: QuitFlag = Arc::new(Mutex::new(false));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -308,7 +386,18 @@ pub fn run() {
                 .level(log::LevelFilter::Info)
                 .build(),
         )
-        .manage(GatewayState(child))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
+        .manage(DesktopState {
+            gateway: child,
+            quitting,
+        })
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "tray_show" => show_main_window(app),
+            "tray_quit" => request_app_exit(app),
+            _ => {}
+        })
         .invoke_handler(tauri::generate_handler![
             check_onboarding_needed,
             write_config,
@@ -332,11 +421,40 @@ pub fn run() {
             }
 
             // Launch gateway sidecar
-            if let Err(err) =
-                ensure_gateway_running(app.handle(), app.state::<GatewayState>().inner().0.clone())
-            {
+            if let Err(err) = ensure_gateway_running(app.handle(), app.state::<DesktopState>().gateway.clone()) {
                 log::warn!("Gateway startup skipped: {err}");
             }
+
+            let tray_icon = app
+                .default_window_icon()
+                .cloned()
+                .ok_or_else(|| "Default tray icon missing".to_string())?;
+            let tray_menu = MenuBuilder::new(app)
+                .text("tray_show", "Open OpenClaw")
+                .separator()
+                .text("tray_quit", "Exit OpenClaw")
+                .build()
+                .map_err(|e| e.to_string())?;
+            TrayIconBuilder::with_id("main")
+                .icon(tray_icon)
+                .menu(&tray_menu)
+                .tooltip("OpenClaw")
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| match event {
+                    TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    }
+                    | TrayIconEvent::DoubleClick {
+                        button: MouseButton::Left,
+                        ..
+                    } => show_main_window(&tray.app_handle().clone()),
+                    _ => {}
+                })
+                .build(app)
+                .map_err(|e| e.to_string())?;
+
             Ok(())
         })
         .on_page_load(move |window, _payload| {
@@ -377,16 +495,25 @@ pub fn run() {
             );
             let _ = window.eval(&js);
         })
-        .on_window_event(move |_win, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                // Use the pre-cloned Arc owned by this closure
-                if let Ok(mut g) = child_for_event.lock() {
-                    if let Some(proc) = g.take() {
-                        log::info!("Stopping gateway...");
-                        let _ = proc.kill();
-                    }
+        .on_window_event(move |win, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                let app = win.app_handle();
+                let state = app.state::<DesktopState>();
+                let quitting = state.quitting.lock().map(|flag| *flag).unwrap_or(false);
+                if !quitting {
+                    api.prevent_close();
+                    let _ = win.hide();
                 }
             }
+            tauri::WindowEvent::Destroyed => {
+                let app = win.app_handle();
+                let state = app.state::<DesktopState>();
+                let quitting = state.quitting.lock().map(|flag| *flag).unwrap_or(false);
+                if quitting {
+                    stop_gateway_process(state.gateway.clone());
+                }
+            }
+            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("error running openclaw");

@@ -57,11 +57,21 @@ OpenClaw has three public release lanes:
   - stable npm publish can target `latest` explicitly via workflow input
   - stable npm promotion from `beta` to `latest` is still available as an explicit manual mode on the trusted `OpenClaw NPM Release` workflow
   - that promotion mode still needs a valid `NPM_TOKEN` in the `npm-release` environment because npm `dist-tag` management is separate from trusted publishing
-  - public `macOS Release` is validation-only
-  - real private mac publish must pass successful private mac
-    `preflight_run_id` and `validate_run_id`
-  - the real publish paths promote prepared artifacts instead of rebuilding
-    them again
+  - desktop release automation now lives in this repo:
+    - `.github/workflows/tauri-windows.yml`
+    - `.github/workflows/tauri-macos-arm64.yml`
+  - both desktop workflows run validation-only lanes on push and pull request
+  - both desktop workflows use manual `workflow_dispatch` release lanes with
+    `tag`, `draft`, and `prerelease` inputs
+  - both desktop workflows force `OPENCLAW_DESKTOP_AUTO_BUMP=0` so the
+    committed desktop version remains the release version
+  - the Windows release lane signs NSIS and MSI installers, verifies the
+    Authenticode signatures, runs separate smoke install jobs, and uploads the
+    installers plus a SHA256 manifest to the matching GitHub release
+  - the macOS release lane imports the signing certificate into a temporary
+    keychain, signs the app, notarizes and staples the `.app` and `.dmg`,
+    packages `.zip` and `.dSYM.zip`, and uploads those assets to the matching
+    GitHub release
 - For stable correction releases like `YYYY.M.D-N`, the post-publish verifier
   also checks the same temp-prefix upgrade path from `YYYY.M.D` to `YYYY.M.D-N`
   so release corrections cannot silently leave older global installs on the
@@ -79,6 +89,39 @@ OpenClaw has three public release lanes:
   - the packaged app must keep a non-debug bundle id, a non-empty Sparkle feed
     URL, and a `CFBundleVersion` at or above the canonical Sparkle build floor
     for that release version
+
+## Desktop workflow inputs and secrets
+
+Windows release workflow inputs:
+
+- `tag`: required release tag such as `v2026.4.10` or `v2026.4.10-beta.1`
+- `draft`: create the GitHub release as a draft when the workflow needs to
+  create it
+- `prerelease`: mark the GitHub release as a prerelease when the workflow needs
+  to create it
+
+Windows release secrets:
+
+- `WINDOWS_PFX_BASE64`
+- `WINDOWS_PFX_PASSWORD`
+- `WINDOWS_TIMESTAMP_URL`
+
+macOS release workflow inputs:
+
+- `tag`: required release tag such as `v2026.4.10` or `v2026.4.10-beta.1`
+- `draft`: create the GitHub release as a draft when the workflow needs to
+  create it
+- `prerelease`: mark the GitHub release as a prerelease when the workflow needs
+  to create it
+
+macOS release secrets:
+
+- `APPLE_CERTIFICATE_P12_BASE64`
+- `APPLE_CERTIFICATE_PASSWORD`
+- `APPLE_SIGNING_IDENTITY`
+- `APPLE_TEAM_ID`
+- `APPLE_ID`
+- `APPLE_APP_SPECIFIC_PASSWORD`
 
 ## NPM workflow inputs
 
@@ -129,6 +172,8 @@ documented and operator-visible.
 ## Public references
 
 - [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml)
+- [`.github/workflows/tauri-windows.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/tauri-windows.yml)
+- [`.github/workflows/tauri-macos-arm64.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/tauri-macos-arm64.yml)
 - [`scripts/openclaw-npm-release-check.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/openclaw-npm-release-check.ts)
 - [`scripts/package-mac-dist.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-dist.sh)
 - [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)
