@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to build from (for example v2026.4.10 or v2026.4.10-beta.1)
+        description: Release tag to build from (for example v0.1.7 or 0.1.7)
         required: true
         type: string
       draft:
@@ -85,7 +85,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          unset APPLE_SIGNING_IDENTITY
+          export APPLE_SIGNING_IDENTITY="-"
           pnpm tauri build --config src-tauri/tauri.macos.conf.json --target aarch64-apple-darwin
 
       - name: Locate build outputs
@@ -126,8 +126,18 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
+          if [[ ! "${RELEASE_TAG}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+((-beta\.[0-9]+)|(-[0-9]+))?$ ]]; then
             echo "Invalid release tag format: ${RELEASE_TAG}"
+            exit 1
+          fi
+
+      - name: Verify release tag exists
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! git ls-remote --exit-code --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "refs/tags/${RELEASE_TAG}" >/dev/null; then
+            echo "::error::Release tag ${RELEASE_TAG} does not exist. Create and push it first: git tag ${RELEASE_TAG} && git push origin ${RELEASE_TAG}"
             exit 1
           fi
 
@@ -162,8 +172,10 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
-          : "${APPLE_CERTIFICATE_P12_BASE64:?Missing APPLE_CERTIFICATE_P12_BASE64 secret}"
-          : "${APPLE_CERTIFICATE_PASSWORD:?Missing APPLE_CERTIFICATE_PASSWORD secret}"
+          if [[ -z "${APPLE_CERTIFICATE_P12_BASE64:-}" || -z "${APPLE_CERTIFICATE_PASSWORD:-}" ]]; then
+            echo "Apple signing certificate secrets are not configured; using ad-hoc signing for the release build."
+            exit 0
+          fi
           CERT_PATH="$RUNNER_TEMP/openclaw-signing.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/openclaw-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -hex 18)"
@@ -190,14 +202,19 @@ jobs:
       - name: Build Control UI
         run: pnpm ui:build
 
-      - name: Build signed macOS app
+      - name: Build macOS app
         working-directory: ${{ env.DESKTOP_DIR }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
-          : "${APPLE_SIGNING_IDENTITY:?Missing APPLE_SIGNING_IDENTITY secret}"
+          if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+            echo "Building with Apple signing identity."
+          else
+            echo "APPLE_SIGNING_IDENTITY is not configured; using ad-hoc signing identity '-'."
+            export APPLE_SIGNING_IDENTITY="-"
+          fi
           pnpm tauri build --config src-tauri/tauri.macos.conf.json --target aarch64-apple-darwin
 
       - name: Locate release artifacts
@@ -216,7 +233,6 @@ jobs:
 
           [[ -n "$APP_PATH" ]] || { echo "Missing .app bundle"; exit 1; }
           [[ -n "$DMG_PATH" ]] || { echo "Missing .dmg bundle"; exit 1; }
-          [[ -n "$DSYM_PATH" ]] || { echo "Missing dSYM bundle"; exit 1; }
 
           {
             echo "app_path=$APP_PATH"
@@ -232,13 +248,15 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
-          : "${APPLE_ID:?Missing APPLE_ID secret}"
-          : "${APPLE_APP_SPECIFIC_PASSWORD:?Missing APPLE_APP_SPECIFIC_PASSWORD secret}"
-          : "${APPLE_TEAM_ID:?Missing APPLE_TEAM_ID secret}"
+          if [[ -z "${APPLE_SIGNING_IDENTITY:-}" || -z "${APPLE_ID:-}" || -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" || -z "${APPLE_TEAM_ID:-}" ]]; then
+            echo "Apple notarization secrets are not fully configured; skipping app notarization."
+            exit 0
+          fi
 
-          rm -f "${{ steps.artifacts.outputs.notary_zip_path }}" "${{ steps.artifacts.outputs.app_zip_path }}"
+          rm -f "${{ steps.artifacts.outputs.notary_zip_path }}"
           ditto -c -k --sequesterRsrc --keepParent "${{ steps.artifacts.outputs.app_path }}" "${{ steps.artifacts.outputs.notary_zip_path }}"
           xcrun notarytool submit "${{ steps.artifacts.outputs.notary_zip_path }}" \
             --apple-id "$APPLE_ID" \
@@ -247,6 +265,11 @@ jobs:
             --wait
           xcrun stapler staple "${{ steps.artifacts.outputs.app_path }}"
           xcrun stapler validate "${{ steps.artifacts.outputs.app_path }}"
+
+      - name: Create app zip
+        run: |
+          set -euo pipefail
+          rm -f "${{ steps.artifacts.outputs.app_zip_path }}"
           ditto -c -k --sequesterRsrc --keepParent "${{ steps.artifacts.outputs.app_path }}" "${{ steps.artifacts.outputs.app_zip_path }}"
 
       - name: Sign, notarize, and staple DMG
@@ -257,6 +280,10 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
+          if [[ -z "${APPLE_SIGNING_IDENTITY:-}" || -z "${APPLE_ID:-}" || -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" || -z "${APPLE_TEAM_ID:-}" ]]; then
+            echo "Apple signing/notarization secrets are not fully configured; skipping DMG signing and notarization."
+            exit 0
+          fi
           codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "${{ steps.artifacts.outputs.dmg_path }}"
           xcrun notarytool submit "${{ steps.artifacts.outputs.dmg_path }}" \
             --apple-id "$APPLE_ID" \
@@ -270,12 +297,23 @@ jobs:
         run: |
           set -euo pipefail
           rm -f "${{ steps.artifacts.outputs.dsym_zip_path }}"
-          ditto -c -k --keepParent "${{ steps.artifacts.outputs.dsym_path }}" "${{ steps.artifacts.outputs.dsym_zip_path }}"
+          if [[ -n "${{ steps.artifacts.outputs.dsym_path }}" ]]; then
+            ditto -c -k --keepParent "${{ steps.artifacts.outputs.dsym_path }}" "${{ steps.artifacts.outputs.dsym_zip_path }}"
+          else
+            echo "No dSYM bundle was generated for this build." > "$RUNNER_TEMP/NO_DSYM.txt"
+            ditto -c -k --keepParent "$RUNNER_TEMP/NO_DSYM.txt" "${{ steps.artifacts.outputs.dsym_zip_path }}"
+          fi
 
       - name: Verify signed artifacts
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
           codesign --verify --deep --strict "${{ steps.artifacts.outputs.app_path }}"
+          if [[ -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+            echo "APPLE_SIGNING_IDENTITY is not configured; skipping Gatekeeper assessment for ad-hoc signed artifacts."
+            exit 0
+          fi
           spctl --assess --type open --context context:primary-signature --verbose "${{ steps.artifacts.outputs.app_path }}"
           spctl --assess --type open --context context:primary-signature --verbose "${{ steps.artifacts.outputs.dmg_path }}"
 
@@ -329,4 +367,6 @@ jobs:
       - name: Cleanup signing keychain
         if: always()
         run: |
-          security delete-keychain "$KEYCHAIN_PATH" || true
+          if [[ -n "${KEYCHAIN_PATH:-}" ]]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi

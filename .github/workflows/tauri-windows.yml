@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to build from (for example v2026.4.10 or v2026.4.10-beta.1)
+        description: Release tag to build from (for example v0.1.7 or 0.1.7)
         required: true
         type: string
       draft:
@@ -122,8 +122,18 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          if ($env:RELEASE_TAG -notmatch '^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$') {
+          if ($env:RELEASE_TAG -notmatch '^v?[0-9]+\.[0-9]+\.[0-9]+((-beta\.[0-9]+)|(-[0-9]+))?$') {
             throw "Invalid release tag format: $env:RELEASE_TAG"
+          }
+
+      - name: Verify release tag exists
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          git ls-remote --exit-code --tags "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY" "refs/tags/$env:RELEASE_TAG" | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release tag $env:RELEASE_TAG does not exist. Create and push it first: git tag $env:RELEASE_TAG; git push origin $env:RELEASE_TAG"
           }
 
       - name: Checkout selected tag
@@ -157,7 +167,8 @@ jobs:
           WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:WINDOWS_PFX_BASE64)) {
-            throw "Missing WINDOWS_PFX_BASE64 secret."
+            Write-Host "WINDOWS_PFX_BASE64 is not configured; continuing with unsigned Windows installers."
+            exit 0
           }
           $pfxPath = Join-Path $env:RUNNER_TEMP "openclaw-signing.pfx"
           [System.IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_PFX_BASE64))
@@ -169,7 +180,7 @@ jobs:
       - name: Build Control UI
         run: pnpm ui:build
 
-      - name: Build signed Windows installers
+      - name: Build Windows installers
         working-directory: ${{ env.DESKTOP_DIR }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -179,7 +190,14 @@ jobs:
 
       - name: Verify Authenticode signatures
         shell: pwsh
+        env:
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
         run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_PFX_BASE64)) {
+            Write-Host "WINDOWS_PFX_BASE64 is not configured; skipping Authenticode verification."
+            exit 0
+          }
+
           function Resolve-SignTool {
             $command = Get-Command signtool.exe -ErrorAction SilentlyContinue
             if ($command) {
