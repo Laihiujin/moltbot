@@ -205,10 +205,32 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: { plugins: { entries: { demo: { enabled: true } } } },
-        cache: false,
+        cache: true,
       }),
     );
     expect(channelProps?.telegram).toBeTruthy();
     expect(channelProps?.matrix).toBeTruthy();
+  });
+
+  it("reuses the cached gateway schema for the same config and manifest registry", () => {
+    const first = loadGatewayRuntimeConfigSchema();
+    const second = loadGatewayRuntimeConfigSchema();
+
+    expect(first).toBe(second);
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(2);
+    expect(mockLoadPluginManifestRegistry).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        config: { plugins: { entries: { demo: { enabled: true } } } },
+        cache: true,
+      }),
+    );
+    expect(mockLoadPluginManifestRegistry).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        config: { plugins: { entries: { demo: { enabled: true } } } },
+        cache: true,
+      }),
+    );
   });
 });

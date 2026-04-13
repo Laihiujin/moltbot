@@ -13,12 +13,14 @@ export type ControlUiBootstrapState = {
   assistantAgentId: string | null;
   serverVersion: string | null;
   settings?: UiSettings;
+  password?: string;
   applySettings?: (next: UiSettings) => void;
 };
 
 type TauriBootstrapAccess = {
   gateway_url?: string;
   token?: string | null;
+  password?: string | null;
 };
 
 type TauriInvoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -46,6 +48,39 @@ function isTauriDesktopHost(): boolean {
   return location.hostname === "tauri.localhost";
 }
 
+function generateGatewayToken(): string {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function applyBootstrapGatewayAuth(
+  state: ControlUiBootstrapState,
+  params: {
+    gatewayUrl?: string;
+    token?: string | null;
+    password?: string | null;
+  },
+) {
+  const gatewayUrl =
+    typeof params.gatewayUrl === "string" && params.gatewayUrl.trim()
+      ? params.gatewayUrl.trim()
+      : state.settings?.gatewayUrl;
+  const token = typeof params.token === "string" ? params.token : "";
+  const password = typeof params.password === "string" ? params.password : "";
+  if (state.settings && gatewayUrl) {
+    const nextSettings = { ...state.settings, gatewayUrl, token };
+    if (typeof state.applySettings === "function") {
+      state.applySettings(nextSettings);
+    } else {
+      state.settings = nextSettings;
+    }
+  }
+  if (typeof state.password === "string") {
+    state.password = password;
+  }
+}
+
 async function loadDesktopGatewayBootstrap(state: ControlUiBootstrapState) {
   if (!isTauriDesktopHost()) {
     return;
@@ -60,15 +95,23 @@ async function loadDesktopGatewayBootstrap(state: ControlUiBootstrapState) {
       typeof result.gateway_url === "string" && result.gateway_url.trim()
         ? result.gateway_url.trim()
         : "ws://127.0.0.1:18789";
-    const token = typeof result.token === "string" ? result.token : "";
-    if (state.settings) {
-      const nextSettings = { ...state.settings, gatewayUrl, token };
-      if (typeof state.applySettings === "function") {
-        state.applySettings(nextSettings);
-      } else {
-        state.settings = nextSettings;
-      }
+    let token = typeof result.token === "string" ? result.token : "";
+    const password = typeof result.password === "string" ? result.password : "";
+    if (!token && !password) {
+      const autoToken = generateGatewayToken();
+      await invoke("write_config", {
+        json: JSON.stringify({
+          gateway: {
+            auth: {
+              mode: "token",
+              token: autoToken,
+            },
+          },
+        }),
+      });
+      token = autoToken;
     }
+    applyBootstrapGatewayAuth(state, { gatewayUrl, token, password });
   } catch {
     // Ignore desktop bootstrap failures and fall back to the normal login gate.
   }
@@ -98,6 +141,10 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
       return;
     }
     const parsed = (await res.json()) as ControlUiBootstrapConfig;
+    applyBootstrapGatewayAuth(state, {
+      token: parsed.token ?? null,
+      password: parsed.password ?? null,
+    });
     const normalized = normalizeAssistantIdentity({
       name: parsed.assistantName,
       avatar: parsed.assistantAvatar ?? null,

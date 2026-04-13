@@ -129,6 +129,99 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["bind"], "tailnet");
   });
 
+  it("renders object unions built from allOf intersections", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        channels: {
+          type: "object",
+          properties: {
+            twitch: {
+              anyOf: [
+                {
+                  allOf: [
+                    {
+                      type: "object",
+                      properties: {
+                        enabled: { type: "boolean" },
+                      },
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        username: { type: "string" },
+                        channel: { type: "string" },
+                      },
+                      required: ["username", "channel"],
+                      additionalProperties: false,
+                    },
+                  ],
+                },
+                {
+                  allOf: [
+                    {
+                      type: "object",
+                      properties: {
+                        enabled: { type: "boolean" },
+                      },
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        accounts: {
+                          type: "object",
+                          additionalProperties: {
+                            type: "object",
+                            properties: {
+                              username: { type: "string" },
+                            },
+                          },
+                        },
+                      },
+                      required: ["accounts"],
+                      additionalProperties: false,
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).not.toContain("channels.twitch");
+
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {
+          "channels.twitch": { label: "Twitch" },
+        },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {
+          channels: {
+            twitch: {
+              enabled: true,
+              username: "bot",
+              channel: "streamer",
+            },
+          },
+        },
+        onPatch,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Twitch");
+    expect(container.textContent).toContain("Username");
+    expect(container.textContent).not.toContain("Unsupported schema node");
+  });
+
   it("renders map fields from additionalProperties", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
@@ -385,6 +478,87 @@ describe("config form renderer", () => {
     apiKeyInput.value = "new-key";
     apiKeyInput.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["models", "providers", "openai", "apiKey"], "new-key");
+  });
+
+  it("collapses model provider entries while keeping nested models collapsed", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        models: {
+          type: "object",
+          properties: {
+            providers: {
+              type: "object",
+              additionalProperties: {
+                type: "object",
+                properties: {
+                  baseUrl: { type: "string" },
+                  models: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        id: { type: "string" },
+                        name: { type: "string" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.example.com/v1",
+                models: [
+                  { id: "gpt-5.4", name: "GPT-5.4" },
+                  { id: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
+                ],
+              },
+            },
+          },
+        },
+        onPatch,
+      }),
+      container,
+    );
+
+    const detailTitles = Array.from(
+      container.querySelectorAll<HTMLElement>("#config-section-models .cfg-object__title"),
+    ).map((node) => node.textContent?.trim());
+    expect(detailTitles).toContain("Openai");
+    expect(detailTitles).toContain("Item #1");
+
+    const providerDetails = Array.from(
+      container.querySelectorAll<HTMLDetailsElement>("#config-section-models details.cfg-object"),
+    ).find((node) => node.querySelector(".cfg-object__title")?.textContent?.trim() === "Openai");
+    expect(providerDetails?.open).toBe(false);
+
+    const modelDetails = Array.from(
+      container.querySelectorAll<HTMLDetailsElement>("#config-section-models details.cfg-object"),
+    ).find((node) => node.querySelector(".cfg-object__title")?.textContent?.trim() === "Item #1");
+    expect(modelDetails?.open).toBe(false);
+
+    const arraySummary = container.querySelector(".cfg-array__item-summary");
+    expect(arraySummary?.textContent?.trim()).toBe("GPT-5.4");
+
+    const addButton = Array.from(container.querySelectorAll<HTMLButtonElement>(".cfg-array__add")).find(
+      (button) => button.textContent?.includes("Add"),
+    );
+    expect(addButton).not.toBeUndefined();
   });
 
   it("accepts renderable unions", () => {

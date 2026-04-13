@@ -71,6 +71,33 @@ type SettingsHost = {
   dreamDiaryContent: string | null;
 };
 
+function configSchemaSectionsForTab(tab: Tab): string[] | undefined {
+  switch (tab) {
+    case "communications":
+      return ["channels", "messages", "broadcast", "talk", "audio"];
+    case "appearance":
+      return ["ui", "wizard"];
+    case "automation":
+      return ["commands", "hooks", "bindings", "cron", "approvals", "plugins"];
+    case "infrastructure":
+      return [
+        "gateway",
+        "web",
+        "browser",
+        "nodeHost",
+        "canvasHost",
+        "discovery",
+        "media",
+        "acp",
+        "mcp",
+      ];
+    case "aiAgents":
+      return ["agents", "models", "skills", "tools", "memory", "session"];
+    default:
+      return undefined;
+  }
+}
+
 export function applySettings(host: SettingsHost, next: UiSettings) {
   const normalized = {
     ...next,
@@ -311,7 +338,9 @@ export async function refreshActiveTab(host: SettingsHost) {
     host.tab === "infrastructure" ||
     host.tab === "aiAgents"
   ) {
-    await loadConfigSchema(host as unknown as OpenClawApp);
+    await loadConfigSchema(host as unknown as OpenClawApp, {
+      sections: configSchemaSectionsForTab(host.tab),
+    });
     await loadConfig(host as unknown as OpenClawApp);
   }
   if (host.tab === "debug") {
@@ -672,7 +701,7 @@ function buildAttentionItems(host: OpenClawApp) {
 export async function loadChannelsTab(host: SettingsHost) {
   await Promise.all([
     loadChannels(host as unknown as OpenClawApp, true),
-    loadConfigSchema(host as unknown as OpenClawApp),
+    loadConfigSchema(host as unknown as OpenClawApp, { sections: ["channels"] }),
     loadConfig(host as unknown as OpenClawApp),
   ]);
 }

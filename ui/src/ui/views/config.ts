@@ -355,6 +355,24 @@ type SectionCategory = {
   sections: Array<{ key: string; label: string }>;
 };
 
+const HIDDEN_COMMUNICATION_CHANNEL_IDS = new Set([
+  "bluebubbles",
+  "googlechat",
+  "irc",
+  "line",
+  "matrix",
+  "mattermost",
+  "msteams",
+  "nextcloud-talk",
+  "signal",
+  "slack",
+  "synology-chat",
+  "tlon",
+  "twitch",
+  "zalo",
+  "zalouser",
+]);
+
 const SECTION_CATEGORIES: SectionCategory[] = [
   {
     id: "core",
@@ -481,6 +499,48 @@ function scopeUnsupportedPaths(
       return !exclude.has(top);
     }
     return true;
+  });
+}
+
+function hideSuppressedCommunicationChannels(schema: JsonSchema | null): JsonSchema | null {
+  if (!schema || schemaType(schema) !== "object" || !schema.properties) {
+    return schema;
+  }
+  const channelsSchema = schema.properties.channels;
+  if (!channelsSchema || schemaType(channelsSchema) !== "object" || !channelsSchema.properties) {
+    return schema;
+  }
+
+  let changed = false;
+  const nextChannelProps: Record<string, JsonSchema> = {};
+  for (const [key, value] of Object.entries(channelsSchema.properties)) {
+    if (HIDDEN_COMMUNICATION_CHANNEL_IDS.has(key)) {
+      changed = true;
+      continue;
+    }
+    nextChannelProps[key] = value;
+  }
+
+  if (!changed) {
+    return schema;
+  }
+
+  return {
+    ...schema,
+    properties: {
+      ...schema.properties,
+      channels: {
+        ...channelsSchema,
+        properties: nextChannelProps,
+      },
+    },
+  };
+}
+
+function hideSuppressedCommunicationUnsupportedPaths(unsupportedPaths: string[]): string[] {
+  return unsupportedPaths.filter((entry) => {
+    const [top, channelId] = entry.split(".");
+    return top !== "channels" || !channelId || !HIDDEN_COMMUNICATION_CHANNEL_IDS.has(channelId);
   });
 }
 
@@ -706,9 +766,12 @@ export function renderConfig(props: ConfigProps) {
   const include = props.includeSections?.length ? new Set(props.includeSections) : null;
   const exclude = props.excludeSections?.length ? new Set(props.excludeSections) : null;
   const rawAnalysis = analyzeConfigSchema(props.schema);
+  const scopedSchema = scopeSchemaSections(rawAnalysis.schema, { include, exclude });
   const analysis = {
-    schema: scopeSchemaSections(rawAnalysis.schema, { include, exclude }),
-    unsupportedPaths: scopeUnsupportedPaths(rawAnalysis.unsupportedPaths, { include, exclude }),
+    schema: hideSuppressedCommunicationChannels(scopedSchema),
+    unsupportedPaths: hideSuppressedCommunicationUnsupportedPaths(
+      scopeUnsupportedPaths(rawAnalysis.unsupportedPaths, { include, exclude }),
+    ),
   };
   const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
   const rawAvailable = props.rawAvailable ?? true;

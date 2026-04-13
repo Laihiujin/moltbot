@@ -36,6 +36,21 @@ export type ConfigState = {
   lastError: string | null;
 };
 
+type LoadConfigSchemaOptions = {
+  sections?: string[];
+};
+
+const configSchemaCache = new Map<string, ConfigSchemaResponse>();
+const configSchemaRequestCache = new Map<string, Promise<ConfigSchemaResponse>>();
+
+function buildConfigSchemaCacheKey(options?: LoadConfigSchemaOptions): string {
+  const sections = Array.from(
+    new Set(options?.sections?.map((entry) => entry.trim()).filter(Boolean) ?? []),
+  )
+    .toSorted((a, b) => a.localeCompare(b));
+  return sections.length > 0 ? `sections:${sections.join(",")}` : "full";
+}
+
 export async function loadConfig(state: ConfigState) {
   if (!state.client || !state.connected) {
     return;
@@ -52,20 +67,43 @@ export async function loadConfig(state: ConfigState) {
   }
 }
 
-export async function loadConfigSchema(state: ConfigState) {
+export async function loadConfigSchema(state: ConfigState, options?: LoadConfigSchemaOptions) {
   if (!state.client || !state.connected) {
     return;
   }
-  if (state.configSchemaLoading) {
+  const cacheKey = buildConfigSchemaCacheKey(options);
+  const cached = configSchemaCache.get(cacheKey);
+  if (cached) {
+    applyConfigSchema(state, cached);
     return;
   }
+
+  const pending = configSchemaRequestCache.get(cacheKey);
+  if (pending) {
+    state.configSchemaLoading = true;
+    try {
+      applyConfigSchema(state, await pending);
+    } catch (err) {
+      state.lastError = String(err);
+    } finally {
+      state.configSchemaLoading = false;
+    }
+    return;
+  }
+
   state.configSchemaLoading = true;
+  const requestPromise = state.client.request<ConfigSchemaResponse>("config.schema", {
+    ...(options?.sections?.length ? { sections: options.sections } : {}),
+  });
+  configSchemaRequestCache.set(cacheKey, requestPromise);
   try {
-    const res = await state.client.request<ConfigSchemaResponse>("config.schema", {});
+    const res = await requestPromise;
+    configSchemaCache.set(cacheKey, res);
     applyConfigSchema(state, res);
   } catch (err) {
     state.lastError = String(err);
   } finally {
+    configSchemaRequestCache.delete(cacheKey);
     state.configSchemaLoading = false;
   }
 }

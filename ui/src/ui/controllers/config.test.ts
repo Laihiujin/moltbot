@@ -4,6 +4,7 @@ import {
   applyConfig,
   ensureAgentConfigEntry,
   findAgentConfigEntryIndex,
+  loadConfigSchema,
   runUpdate,
   saveConfig,
   updateConfigFormValue,
@@ -124,6 +125,73 @@ describe("applyConfigSnapshot", () => {
 
     expect(state.configFormMode).toBe("form");
     expect(state.configRaw).toBe('{\n  "gateway": {\n    "mode": "local"\n  }\n}\n');
+  });
+});
+
+describe("loadConfigSchema", () => {
+  it("requests scoped config schema sections", async () => {
+    const request = vi.fn().mockResolvedValue({
+      schema: {
+        type: "object",
+        properties: {
+          models: { type: "object", properties: {} },
+        },
+      },
+      uiHints: {
+        models: { label: "Models" },
+      },
+      version: "test-version",
+      generatedAt: "test-generated-at",
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await loadConfigSchema(state, { sections: ["models", "agents"] });
+
+    expect(request).toHaveBeenCalledWith("config.schema", {
+      sections: ["models", "agents"],
+    });
+    expect(state.configSchema).toEqual({
+      type: "object",
+      properties: {
+        models: { type: "object", properties: {} },
+      },
+    });
+    expect(state.configUiHints).toEqual({
+      models: { label: "Models" },
+    });
+  });
+
+  it("reuses cached schema responses for the same section set", async () => {
+    const request = vi.fn().mockResolvedValue({
+      schema: {
+        type: "object",
+        properties: {
+          tools: { type: "object", properties: {} },
+        },
+      },
+      uiHints: {
+        tools: { label: "Tools" },
+      },
+      version: "cached-version",
+      generatedAt: "cached-generated-at",
+    });
+    const first = createState();
+    first.connected = true;
+    first.client = { request } as unknown as ConfigState["client"];
+
+    await loadConfigSchema(first, { sections: ["tools", "memory"] });
+
+    const second = createState();
+    second.connected = true;
+    second.client = { request } as unknown as ConfigState["client"];
+
+    await loadConfigSchema(second, { sections: ["memory", "tools"] });
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(second.configSchemaVersion).toBe("cached-version");
+    expect(second.configUiHints.tools).toEqual({ label: "Tools" });
   });
 });
 

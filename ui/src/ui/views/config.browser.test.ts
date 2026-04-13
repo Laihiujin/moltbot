@@ -534,4 +534,113 @@ describe("config view", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onFormPatch).toHaveBeenCalledWith(["gateway", "mode"], "local");
   });
+
+  it("hides suppressed communication channels from the channels section", () => {
+    const { container } = renderConfigView({
+      schema: {
+        type: "object",
+        properties: {
+          channels: {
+            type: "object",
+            properties: {
+              bluebubbles: {
+                type: "object",
+                properties: {
+                  enabled: { type: "boolean" },
+                },
+              },
+              discord: {
+                type: "object",
+                properties: {
+                  enabled: { type: "boolean" },
+                },
+              },
+              defaults: {
+                type: "object",
+                properties: {
+                  groupPolicy: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+      },
+      uiHints: {
+        "channels.bluebubbles": { label: "BlueBubbles" },
+        "channels.discord": { label: "Discord" },
+        "channels.defaults": { label: "Defaults" },
+      },
+      formValue: {
+        channels: {
+          bluebubbles: { enabled: true },
+          discord: { enabled: true },
+          defaults: { groupPolicy: "pairing" },
+        },
+      },
+      originalValue: {
+        channels: {
+          bluebubbles: { enabled: true },
+          discord: { enabled: true },
+          defaults: { groupPolicy: "pairing" },
+        },
+      },
+      activeSection: "channels",
+    });
+
+    const text = normalizedText(container);
+    expect(text).not.toContain("BlueBubbles");
+    expect(text).toContain("Discord");
+    expect(text).toContain("Defaults");
+  });
+
+  it("keeps model providers collapsed by default", () => {
+    const { container } = renderConfigView({
+      schema: {
+        type: "object",
+        properties: {
+          models: {
+            type: "object",
+            properties: {
+              providers: {
+                type: "object",
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    apiKey: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      uiHints: {
+        models: { label: "Models" },
+        "models.providers": { label: "Providers" },
+        "models.providers.qwen": { label: "Qwen" },
+      },
+      formValue: {
+        models: {
+          providers: {
+            qwen: { apiKey: "secret" },
+          },
+        },
+      },
+      originalValue: {
+        models: {
+          providers: {
+            qwen: { apiKey: "secret" },
+          },
+        },
+      },
+      activeSection: "models",
+    });
+
+    const providersDetails = Array.from(container.querySelectorAll("details.cfg-object")).find(
+      (node) => node.querySelector(".cfg-object__title")?.textContent?.trim() === "Providers",
+    ) as HTMLDetailsElement | undefined;
+
+    expect(providersDetails).toBeDefined();
+    expect(providersDetails?.open).toBe(false);
+  });
 });

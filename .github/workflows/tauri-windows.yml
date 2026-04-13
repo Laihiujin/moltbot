@@ -81,13 +81,6 @@ jobs:
       - name: Build Control UI
         run: pnpm ui:build
 
-      - name: Copy node.exe as gateway sidecar
-        shell: pwsh
-        run: |
-          $nodePath = (Get-Command node).Source
-          New-Item -ItemType Directory -Force -Path "apps/desktop-tauri/src-tauri/binaries" | Out-Null
-          Copy-Item $nodePath "apps/desktop-tauri/src-tauri/binaries/gateway-x86_64-pc-windows-msvc.exe" -Force
-
       - name: Build Tauri Windows installers
         working-directory: ${{ env.DESKTOP_DIR }}
         env:
@@ -175,13 +168,6 @@ jobs:
 
       - name: Build Control UI
         run: pnpm ui:build
-
-      - name: Copy node.exe as gateway sidecar
-        shell: pwsh
-        run: |
-          $nodePath = (Get-Command node).Source
-          New-Item -ItemType Directory -Force -Path "apps/desktop-tauri/src-tauri/binaries" | Out-Null
-          Copy-Item $nodePath "apps/desktop-tauri/src-tauri/binaries/gateway-x86_64-pc-windows-msvc.exe" -Force
 
       - name: Build signed Windows installers
         working-directory: ${{ env.DESKTOP_DIR }}

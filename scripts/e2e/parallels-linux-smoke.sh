@@ -19,6 +19,7 @@ INSTALL_VERSION=""
 TARGET_PACKAGE_SPEC=""
 JSON_OUTPUT=0
 KEEP_SERVER=0
+AUTH_SMOKE_PASSWORD="OpenClawSmokePassword!"
 SNAPSHOT_ID=""
 SNAPSHOT_STATE=""
 SNAPSHOT_NAME=""
@@ -42,11 +43,13 @@ FRESH_MAIN_STATUS="skip"
 FRESH_MAIN_VERSION="skip"
 FRESH_GATEWAY_STATUS="skip"
 FRESH_AGENT_STATUS="skip"
+FRESH_DASHBOARD_STATUS="skip"
 UPGRADE_STATUS="skip"
 LATEST_INSTALLED_VERSION="skip"
 UPGRADE_MAIN_VERSION="skip"
 UPGRADE_GATEWAY_STATUS="skip"
 UPGRADE_AGENT_STATUS="skip"
+UPGRADE_DASHBOARD_STATUS="skip"
 DAEMON_STATUS="systemd-user-unavailable"
 
 say() {
@@ -611,6 +614,14 @@ verify_version_contains() {
 }
 
 run_ref_onboard() {
+  local auth_scenario="${1:-auto-entry}"
+  local auth_args=()
+  if [[ "$auth_scenario" == "password-entry" ]]; then
+    auth_args=(
+      --gateway-auth password
+      --gateway-password "$AUTH_SMOKE_PASSWORD"
+    )
+  fi
   guest_exec /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" openclaw onboard \
     --non-interactive \
     --mode local \
@@ -618,6 +629,7 @@ run_ref_onboard() {
     --secret-input-mode ref \
     --gateway-port 18789 \
     --gateway-bind loopback \
+    "${auth_args[@]}" \
     --skip-skills \
     --skip-health \
     --accept-risk \
@@ -665,6 +677,118 @@ verify_local_turn() {
     --agent main \
     --message ping \
     --json
+}
+
+verify_dashboard_load() {
+  guest_exec bash -lc "$(cat <<'EOF'
+deadline=$((SECONDS + 30))
+dashboard_ready=0
+while [ "$SECONDS" -lt "$deadline" ]; do
+  if curl -fsSL 'http://127.0.0.1:18789/' >/tmp/openclaw-dashboard-smoke.html 2>/dev/null; then
+    if grep -F '<title>OpenClaw Control</title>' /tmp/openclaw-dashboard-smoke.html >/dev/null && \
+      grep -F '<openclaw-app></openclaw-app>' /tmp/openclaw-dashboard-smoke.html >/dev/null; then
+      dashboard_ready=1
+      break
+    fi
+  fi
+  sleep 1
+done
+[ "$dashboard_ready" = "1" ] || {
+  echo 'dashboard HTML did not become ready at http://127.0.0.1:18789/' >&2
+  exit 1
+}
+EOF
+)"
+}
+
+inspect_gateway_auth() {
+  guest_exec python3 - <<'PY'
+import json
+import pathlib
+
+path = pathlib.Path("/root/.openclaw/openclaw.json")
+if not path.exists():
+    print(json.dumps({"mode": None, "hasToken": False, "hasPassword": False}))
+    raise SystemExit(0)
+
+raw = json.loads(path.read_text())
+gateway = raw.get("gateway") or {}
+auth = gateway.get("auth") or {}
+token = auth.get("token")
+password = auth.get("password")
+
+def has_plain_secret(value):
+    return isinstance(value, str) and value.strip() and not value.strip().startswith("${")
+
+print(
+    json.dumps(
+        {
+            "mode": auth.get("mode"),
+            "hasToken": has_plain_secret(token),
+            "hasPassword": has_plain_secret(password),
+        }
+    )
+)
+PY
+}
+
+scenario_summary_path() {
+  printf '%s/%s-%s-summary.json\n' "$RUN_DIR" "$1" "$2"
+}
+
+detect_fatal_errors_for_prefix() {
+  local prefix="$1"
+  python3 - "$RUN_DIR" "$prefix" <<'PY'
+import pathlib
+import re
+import sys
+
+run_dir = pathlib.Path(sys.argv[1])
+prefix = sys.argv[2]
+pattern = re.compile(r"(fatal|uncaught|panic|traceback|segmentation fault)", re.IGNORECASE)
+found = False
+for path in sorted(run_dir.glob(f"{prefix}*.log")):
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        continue
+    if pattern.search(text):
+        found = True
+        break
+print("true" if found else "false")
+PY
+}
+
+write_auth_scenario_summary() {
+  local lane="$1"
+  local scenario="$2"
+  local status="$3"
+  local gateway_status="$4"
+  local dashboard_status="$5"
+  local agent_status="$6"
+  local auth_json fatal_errors
+  auth_json="$(inspect_gateway_auth)"
+  fatal_errors="$(detect_fatal_errors_for_prefix "$lane.$scenario.")"
+  python3 - "$(scenario_summary_path "$lane" "$scenario")" "$scenario" "$status" "$gateway_status" "$dashboard_status" "$agent_status" "$fatal_errors" "$auth_json" <<'PY'
+import json
+import sys
+
+path, scenario, status, gateway_status, dashboard_status, agent_status, fatal_errors, auth_json = sys.argv[1:]
+auth = json.loads(auth_json)
+summary = {
+    "scenario": scenario,
+    "status": status,
+    "gateway": gateway_status,
+    "dashboard": dashboard_status,
+    "agent": agent_status,
+    "authModeUsed": auth.get("mode"),
+    "autoTokenAcquired": scenario == "auto-entry" and auth.get("mode") == "token" and auth.get("hasToken") and not auth.get("hasPassword"),
+    "enteredWithoutManualCredential": scenario == "auto-entry",
+    "fatalErrorsDetected": fatal_errors == "true",
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(summary, handle, indent=2, sort_keys=True)
+PY
 }
 
 phase_log_path() {
@@ -744,6 +868,15 @@ write_summary_json() {
 import json
 import os
 import sys
+from pathlib import Path
+
+def load_optional(path_value):
+    if not path_value:
+        return None
+    path = Path(path_value)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
 
 summary = {
     "vm": os.environ["SUMMARY_VM"],
@@ -762,6 +895,11 @@ summary = {
         "version": os.environ["SUMMARY_FRESH_MAIN_VERSION"],
         "gateway": os.environ["SUMMARY_FRESH_GATEWAY_STATUS"],
         "agent": os.environ["SUMMARY_FRESH_AGENT_STATUS"],
+        "dashboard": os.environ["SUMMARY_FRESH_DASHBOARD_STATUS"],
+        "authScenarios": {
+            "autoEntry": load_optional(os.environ.get("SUMMARY_FRESH_AUTO_ENTRY_PATH")),
+            "passwordEntry": load_optional(os.environ.get("SUMMARY_FRESH_PASSWORD_ENTRY_PATH")),
+        },
     },
     "upgrade": {
         "status": os.environ["SUMMARY_UPGRADE_STATUS"],
@@ -769,6 +907,10 @@ summary = {
         "mainVersion": os.environ["SUMMARY_UPGRADE_MAIN_VERSION"],
         "gateway": os.environ["SUMMARY_UPGRADE_GATEWAY_STATUS"],
         "agent": os.environ["SUMMARY_UPGRADE_AGENT_STATUS"],
+        "dashboard": os.environ["SUMMARY_UPGRADE_DASHBOARD_STATUS"],
+        "authScenarios": {
+            "autoEntry": load_optional(os.environ.get("SUMMARY_UPGRADE_AUTO_ENTRY_PATH")),
+        },
     },
 }
 with open(sys.argv[1], "w", encoding="utf-8") as handle:
@@ -786,12 +928,21 @@ run_fresh_main_lane() {
   phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz"
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
-  phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
-  phase_run "fresh.gateway-start" "$TIMEOUT_GATEWAY_S" start_gateway_background
-  phase_run "fresh.gateway-status" "$TIMEOUT_VERIFY_S" show_gateway_status_compat
+  phase_run "fresh.auto-entry.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard "auto-entry"
+  phase_run "fresh.auto-entry.gateway-start" "$TIMEOUT_GATEWAY_S" start_gateway_background
+  phase_run "fresh.auto-entry.gateway-status" "$TIMEOUT_VERIFY_S" show_gateway_status_compat
   FRESH_GATEWAY_STATUS="pass"
-  phase_run "fresh.first-local-agent-turn" "$TIMEOUT_AGENT_S" verify_local_turn
+  phase_run "fresh.auto-entry.dashboard-load" "$TIMEOUT_VERIFY_S" verify_dashboard_load
+  FRESH_DASHBOARD_STATUS="pass"
+  phase_run "fresh.auto-entry.first-local-agent-turn" "$TIMEOUT_AGENT_S" verify_local_turn
   FRESH_AGENT_STATUS="pass"
+  write_auth_scenario_summary "fresh" "auto-entry" "pass" "pass" "pass" "pass"
+  phase_run "fresh.password-entry.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard "password-entry"
+  phase_run "fresh.password-entry.gateway-start" "$TIMEOUT_GATEWAY_S" start_gateway_background
+  phase_run "fresh.password-entry.gateway-status" "$TIMEOUT_VERIFY_S" show_gateway_status_compat
+  phase_run "fresh.password-entry.dashboard-load" "$TIMEOUT_VERIFY_S" verify_dashboard_load
+  phase_run "fresh.password-entry.first-local-agent-turn" "$TIMEOUT_AGENT_S" verify_local_turn
+  write_auth_scenario_summary "fresh" "password-entry" "pass" "pass" "pass" "pass"
 }
 
 run_upgrade_lane() {
@@ -805,12 +956,15 @@ run_upgrade_lane() {
   phase_run "upgrade.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz"
   UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
   phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
-  phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
-  phase_run "upgrade.gateway-start" "$TIMEOUT_GATEWAY_S" start_gateway_background
-  phase_run "upgrade.gateway-status" "$TIMEOUT_VERIFY_S" show_gateway_status_compat
+  phase_run "upgrade.auto-entry.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard "auto-entry"
+  phase_run "upgrade.auto-entry.gateway-start" "$TIMEOUT_GATEWAY_S" start_gateway_background
+  phase_run "upgrade.auto-entry.gateway-status" "$TIMEOUT_VERIFY_S" show_gateway_status_compat
   UPGRADE_GATEWAY_STATUS="pass"
-  phase_run "upgrade.first-local-agent-turn" "$TIMEOUT_AGENT_S" verify_local_turn
+  phase_run "upgrade.auto-entry.dashboard-load" "$TIMEOUT_VERIFY_S" verify_dashboard_load
+  UPGRADE_DASHBOARD_STATUS="pass"
+  phase_run "upgrade.auto-entry.first-local-agent-turn" "$TIMEOUT_AGENT_S" verify_local_turn
   UPGRADE_AGENT_STATUS="pass"
+  write_auth_scenario_summary "upgrade" "auto-entry" "pass" "pass" "pass" "pass"
 }
 
 RESOLVED_VM_NAME="$(resolve_vm_name)"
@@ -881,11 +1035,16 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_FRESH_MAIN_VERSION="$FRESH_MAIN_VERSION" \
   SUMMARY_FRESH_GATEWAY_STATUS="$FRESH_GATEWAY_STATUS" \
   SUMMARY_FRESH_AGENT_STATUS="$FRESH_AGENT_STATUS" \
+  SUMMARY_FRESH_DASHBOARD_STATUS="$FRESH_DASHBOARD_STATUS" \
+  SUMMARY_FRESH_AUTO_ENTRY_PATH="$(scenario_summary_path fresh auto-entry)" \
+  SUMMARY_FRESH_PASSWORD_ENTRY_PATH="$(scenario_summary_path fresh password-entry)" \
   SUMMARY_UPGRADE_STATUS="$UPGRADE_STATUS" \
   SUMMARY_LATEST_INSTALLED_VERSION="$LATEST_INSTALLED_VERSION" \
   SUMMARY_UPGRADE_MAIN_VERSION="$UPGRADE_MAIN_VERSION" \
   SUMMARY_UPGRADE_GATEWAY_STATUS="$UPGRADE_GATEWAY_STATUS" \
   SUMMARY_UPGRADE_AGENT_STATUS="$UPGRADE_AGENT_STATUS" \
+  SUMMARY_UPGRADE_DASHBOARD_STATUS="$UPGRADE_DASHBOARD_STATUS" \
+  SUMMARY_UPGRADE_AUTO_ENTRY_PATH="$(scenario_summary_path upgrade auto-entry)" \
   write_summary_json
 )"
 
@@ -900,8 +1059,8 @@ else
     printf '  baseline-install-version: %s\n' "$INSTALL_VERSION"
   fi
   printf '  daemon: %s\n' "$DAEMON_STATUS"
-  printf '  fresh-main: %s (%s)\n' "$FRESH_MAIN_STATUS" "$FRESH_MAIN_VERSION"
-  printf '  latest->main: %s (%s)\n' "$UPGRADE_STATUS" "$UPGRADE_MAIN_VERSION"
+  printf '  fresh-main: %s (%s) dashboard=%s\n' "$FRESH_MAIN_STATUS" "$FRESH_MAIN_VERSION" "$FRESH_DASHBOARD_STATUS"
+  printf '  latest->main: %s (%s) dashboard=%s\n' "$UPGRADE_STATUS" "$UPGRADE_MAIN_VERSION" "$UPGRADE_DASHBOARD_STATUS"
   printf '  logs: %s\n' "$RUN_DIR"
   printf '  summary: %s\n' "$SUMMARY_JSON_PATH"
 fi

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
-import { resolveAuthHintKind, shouldShowPairingHint } from "./overview-hints.ts";
+import {
+  resolveAuthHintKind,
+  shouldShowGatewayPasswordInput,
+  shouldShowPairingHint,
+} from "./overview-hints.ts";
 
 describe("shouldShowPairingHint", () => {
   it("returns true for 'pairing required' close reason", () => {
@@ -85,5 +89,37 @@ describe("resolveAuthHintKind", () => {
         hasPassword: false,
       }),
     ).toBe("failed");
+  });
+});
+
+describe("shouldShowGatewayPasswordInput", () => {
+  it("returns false by default when no password auth is needed", () => {
+    expect(
+      shouldShowGatewayPasswordInput({
+        authMode: "token",
+        password: "",
+        lastErrorCode: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when the gateway auth mode is password", () => {
+    expect(
+      shouldShowGatewayPasswordInput({
+        authMode: "password",
+        password: "",
+        lastErrorCode: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true after password auth failures", () => {
+    expect(
+      shouldShowGatewayPasswordInput({
+        authMode: null,
+        password: "",
+        lastErrorCode: ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
+      }),
+    ).toBe(true);
   });
 });

@@ -80,12 +80,6 @@ jobs:
       - name: Build Control UI
         run: pnpm ui:build
 
-      - name: Copy node as gateway sidecar
-        run: |
-          mkdir -p apps/desktop-tauri/src-tauri/binaries
-          cp "$(which node)" apps/desktop-tauri/src-tauri/binaries/gateway-aarch64-apple-darwin
-          chmod +x apps/desktop-tauri/src-tauri/binaries/gateway-aarch64-apple-darwin
-
       - name: Build Tauri macOS app
         working-directory: ${{ env.DESKTOP_DIR }}
         env:
@@ -195,12 +189,6 @@ jobs:
 
       - name: Build Control UI
         run: pnpm ui:build
-
-      - name: Copy node as gateway sidecar
-        run: |
-          mkdir -p apps/desktop-tauri/src-tauri/binaries
-          cp "$(which node)" apps/desktop-tauri/src-tauri/binaries/gateway-aarch64-apple-darwin
-          chmod +x apps/desktop-tauri/src-tauri/binaries/gateway-aarch64-apple-darwin
 
       - name: Build signed macOS app
         working-directory: ${{ env.DESKTOP_DIR }}

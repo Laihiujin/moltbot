@@ -22,6 +22,7 @@ struct DesktopState {
 struct GatewayBootstrap {
     gateway_url: String,
     token: Option<String>,
+    password: Option<String>,
 }
 
 // ──────────────────────────────────────────
@@ -86,6 +87,7 @@ fn bootstrap_gateway_access(
     Ok(GatewayBootstrap {
         gateway_url: "ws://127.0.0.1:18789".to_string(),
         token: read_gateway_token_from_config(),
+        password: read_gateway_password_from_config(),
     })
 }
 
@@ -135,20 +137,68 @@ fn json_merge(dst: &mut serde_json::Value, src: serde_json::Value) {
     }
 }
 
+fn read_nonempty_secret_from_config(
+    config: &serde_json::Value,
+    pointers: &[&str],
+) -> Option<String> {
+    for pointer in pointers {
+        let Some(raw) = config
+            .pointer(pointer)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        if raw.starts_with("${") && raw.ends_with('}') {
+            let env_name = raw
+                .trim_start_matches("${")
+                .trim_end_matches('}')
+                .trim()
+                .to_string();
+            if env_name.is_empty() {
+                return None;
+            }
+            if let Ok(value) = std::env::var(&env_name) {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+            continue;
+        }
+        return Some(raw.to_string());
+    }
+    None
+}
+
+fn read_gateway_auth_mode(config: &serde_json::Value) -> Option<String> {
+    config
+        .pointer("/gateway/auth/mode")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
 fn read_gateway_token_from_config() -> Option<String> {
     let path = config_path();
     let raw = std::fs::read_to_string(path).ok()?;
     let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let token = parsed
-        .pointer("/gateway/auth/token")
-        .or_else(|| parsed.pointer("/auth/token"))
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())?;
-    if token.starts_with("${") && token.ends_with('}') {
+    if matches!(read_gateway_auth_mode(&parsed).as_deref(), Some("password")) {
         return None;
     }
-    Some(token.to_string())
+    read_nonempty_secret_from_config(&parsed, &["/gateway/auth/token", "/auth/token"])
+}
+
+fn read_gateway_password_from_config() -> Option<String> {
+    let path = config_path();
+    let raw = std::fs::read_to_string(path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    if !matches!(read_gateway_auth_mode(&parsed).as_deref(), Some("password")) {
+        return None;
+    }
+    read_nonempty_secret_from_config(&parsed, &["/gateway/auth/password"])
 }
 
 fn read_nonempty_plain_token(config: &serde_json::Value, pointer: &str) -> Option<String> {

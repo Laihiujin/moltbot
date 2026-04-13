@@ -12,6 +12,7 @@ import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import { resolveGatewayInteractiveSurfaceAuth } from "./auth-surface-resolution.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
@@ -39,6 +40,7 @@ export type ControlUiRequestOptions = {
   config?: OpenClawConfig;
   agentId?: string;
   root?: ControlUiRootState;
+  revealBootstrapAuth?: boolean;
 };
 
 export type ControlUiRootState =
@@ -305,11 +307,11 @@ function isSafeRelativePath(relPath: string) {
   return true;
 }
 
-export function handleControlUiHttpRequest(
+export async function handleControlUiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts?: ControlUiRequestOptions,
-): boolean {
+): Promise<boolean> {
   const urlRaw = req.url;
   if (!urlRaw) {
     return false;
@@ -361,10 +363,19 @@ export function handleControlUiHttpRequest(
       res.end();
       return true;
     }
+    const bootstrapAuth =
+      config && opts?.revealBootstrapAuth
+        ? await resolveGatewayInteractiveSurfaceAuth({
+            config,
+            env: process.env,
+          })
+        : undefined;
     sendJson(res, 200, {
       basePath,
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
+      token: bootstrapAuth?.token,
+      password: bootstrapAuth?.password,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }

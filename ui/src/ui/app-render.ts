@@ -763,6 +763,11 @@ export function renderApp(state: AppViewState) {
               },
               onConnect: () => state.connect(),
               onRefresh: () => state.loadOverview(),
+              onOpenGatewayAuthSettings: () => {
+                state.infrastructureActiveSection = "gateway";
+                state.infrastructureActiveSubsection = null;
+                state.setTab("infrastructure");
+              },
               onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
               onRefreshLogs: () => state.loadOverview(),
             })

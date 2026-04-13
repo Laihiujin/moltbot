@@ -21,6 +21,7 @@ import { renderOverviewCards } from "./overview-cards.ts";
 import { renderOverviewEventLog } from "./overview-event-log.ts";
 import {
   resolveAuthHintKind,
+  shouldShowGatewayPasswordInput,
   shouldShowInsecureContextHint,
   shouldShowPairingHint,
 } from "./overview-hints.ts";
@@ -57,6 +58,7 @@ export type OverviewProps = {
   onToggleGatewayPasswordVisibility: () => void;
   onConnect: () => void;
   onRefresh: () => void;
+  onOpenGatewayAuthSettings: () => void;
   onNavigate: (tab: string) => void;
   onRefreshLogs: () => void;
 };
@@ -75,6 +77,12 @@ export function renderOverview(props: OverviewProps) {
     : t("common.na");
   const authMode = snapshot?.authMode;
   const isTrustedProxy = authMode === "trusted-proxy";
+  const authModeLabel = authMode === "password" ? "password" : isTrustedProxy ? "trusted-proxy" : "token";
+  const showPasswordInput = shouldShowGatewayPasswordInput({
+    authMode,
+    password: props.password,
+    lastErrorCode: props.lastErrorCode,
+  });
 
   const pairingHint = (() => {
     if (!shouldShowPairingHint(props.connected, props.lastError, props.lastErrorCode)) {
@@ -267,33 +275,37 @@ export function renderOverview(props: OverviewProps) {
                     </button>
                   </div>
                 </label>
-                <label class="field">
-                  <span>${t("overview.access.password")}</span>
-                  <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
-                    <input
-                      type=${props.showGatewayPassword ? "text" : "password"}
-                      autocomplete="off"
-                      style="flex: 1 1 0%; min-width: 0; width: 100%; box-sizing: border-box;"
-                      .value=${props.password}
-                      @input=${(e: Event) => {
-                        const v = (e.target as HTMLInputElement).value;
-                        props.onPasswordChange(v);
-                      }}
-                      placeholder="system or shared password"
-                    />
-                    <button
-                      type="button"
-                      class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
-                      style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
-                      title=${props.showGatewayPassword ? "Hide password" : "Show password"}
-                      aria-label="Toggle password visibility"
-                      aria-pressed=${props.showGatewayPassword}
-                      @click=${props.onToggleGatewayPasswordVisibility}
-                    >
-                      ${props.showGatewayPassword ? icons.eye : icons.eyeOff}
-                    </button>
-                  </div>
-                </label>
+                ${showPasswordInput
+                  ? html`
+                      <label class="field">
+                        <span>${t("overview.access.password")}</span>
+                        <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                          <input
+                            type=${props.showGatewayPassword ? "text" : "password"}
+                            autocomplete="off"
+                            style="flex: 1 1 0%; min-width: 0; width: 100%; box-sizing: border-box;"
+                            .value=${props.password}
+                            @input=${(e: Event) => {
+                              const v = (e.target as HTMLInputElement).value;
+                              props.onPasswordChange(v);
+                            }}
+                            placeholder="system or shared password"
+                          />
+                          <button
+                            type="button"
+                            class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
+                            style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
+                            title=${props.showGatewayPassword ? "Hide password" : "Show password"}
+                            aria-label="Toggle password visibility"
+                            aria-pressed=${props.showGatewayPassword}
+                            @click=${props.onToggleGatewayPasswordVisibility}
+                          >
+                            ${props.showGatewayPassword ? icons.eye : icons.eyeOff}
+                          </button>
+                        </div>
+                      </label>
+                    `
+                  : nothing}
               `}
           <label class="field">
             <span>${t("overview.access.sessionKey")}</span>
@@ -332,6 +344,16 @@ export function renderOverview(props: OverviewProps) {
               ? t("overview.access.trustedProxy")
               : t("overview.access.connectHint")}</span
           >
+        </div>
+        <div class="row" style="margin-top: 10px; align-items: center;">
+          <span class="muted">${t("common.mode")}: <span class="mono">${authModeLabel}</span></span>
+          ${isTrustedProxy
+            ? nothing
+            : html`
+                <button class="btn" @click=${() => props.onOpenGatewayAuthSettings()}>
+                  ${t("tabs.infrastructure")} → Gateway
+                </button>
+              `}
         </div>
         ${!props.connected
           ? html`

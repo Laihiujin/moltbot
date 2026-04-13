@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { SENSITIVE_URL_HINT_TAG } from "../shared/net/redact-sensitive-url.js";
-import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
+import { buildConfigSchema, lookupConfigSchema, scopeConfigSchemaResponse } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 
@@ -344,6 +344,17 @@ describe("config schema", () => {
     expect(tokenChild?.hintPath).toBe("gateway.auth.token");
     const schema = lookup?.schema as { properties?: unknown } | undefined;
     expect(schema?.properties).toBeUndefined();
+  });
+
+  it("scopes config schema responses to requested top-level sections", () => {
+    const scoped = scopeConfigSchemaResponse(baseSchema, ["models", "agents"]);
+    const schema = scoped.schema as { properties?: Record<string, unknown> };
+
+    expect(Object.keys(schema.properties ?? {}).toSorted()).toEqual(["agents", "models"]);
+    expect(scoped.uiHints.agents?.label).toBeTruthy();
+    expect(scoped.uiHints["models.providers"]?.label).toBeTruthy();
+    expect(scoped.uiHints.gateway).toBeUndefined();
+    expect(scoped.uiHints["channels.discord.token"]).toBeUndefined();
   });
 
   it("returns a shallow lookup schema without nested composition keywords", () => {

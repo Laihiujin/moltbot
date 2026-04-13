@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadConfigMock as loadConfig,
+  readConfigFileSnapshotMock as readConfigFileSnapshot,
+  replaceConfigFileMock as replaceConfigFile,
   resolveConfigPathMock as resolveConfigPath,
   resolveGatewayPortMock as resolveGatewayPort,
   resolveStateDirMock as resolveStateDir,
@@ -14,6 +16,8 @@ vi.mock("../config/config.js", async () => {
   const mocks = await import("../gateway/gateway-connection.test-mocks.js");
   return {
     loadConfig: mocks.loadConfigMock,
+    readConfigFileSnapshot: mocks.readConfigFileSnapshotMock,
+    replaceConfigFile: mocks.replaceConfigFileMock,
     resolveConfigPath: mocks.resolveConfigPathMock,
     resolveGatewayPort: mocks.resolveGatewayPortMock,
     resolveStateDir: mocks.resolveStateDirMock,
@@ -111,6 +115,8 @@ describe("resolveGatewayConnection", () => {
       "OPENCLAW_GATEWAY_PASSWORD",
     ]);
     loadConfig.mockReset();
+    readConfigFileSnapshot.mockReset();
+    replaceConfigFile.mockReset();
     resolveGatewayPort.mockReset();
     resolveStateDir.mockReset();
     resolveConfigPath.mockReset();
@@ -122,6 +128,14 @@ describe("resolveGatewayConnection", () => {
       (env: NodeJS.ProcessEnv, stateDir: string) =>
         env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`,
     );
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      sourceConfig: {},
+      config: {},
+      hash: "hash",
+    });
+    replaceConfigFile.mockResolvedValue(undefined);
     delete process.env.OPENCLAW_GATEWAY_URL;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
@@ -197,7 +211,7 @@ describe("resolveGatewayConnection", () => {
     expect(result.token).toBeUndefined();
   });
 
-  it("fails when both local token and password are configured but gateway.auth.mode is unset", async () => {
+  it("prefers token when both local token and password are configured but gateway.auth.mode is unset", async () => {
     loadConfig.mockReturnValue({
       gateway: {
         mode: "local",
@@ -208,8 +222,94 @@ describe("resolveGatewayConnection", () => {
       },
     });
 
+    const result = await resolveGatewayConnection({});
+    expect(result.token).toBe("config-token");
+    expect(result.password).toBeUndefined();
+  });
+
+  it("ignores inactive password config when local auth.mode is token", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "token",
+          token: "config-token",
+          password: "config-password",
+        },
+      },
+    });
+
+    const result = await resolveGatewayConnection({});
+    expect(result.token).toBe("config-token");
+    expect(result.password).toBeUndefined();
+  });
+
+  it("auto-generates and persists a local gateway token when no credentials are configured", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+      },
+    });
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "local",
+        },
+      },
+      config: {
+        gateway: {
+          mode: "local",
+        },
+      },
+      hash: "hash",
+    });
+
+    const result = await resolveGatewayConnection({});
+
+    expect(result.password).toBeUndefined();
+    expect(typeof result.token).toBe("string");
+    expect(result.token).toMatch(/^[0-9a-f]{48}$/);
+    expect(replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: result.token,
+          },
+        },
+      },
+      baseHash: "hash",
+    });
+  });
+
+  it("surfaces a clear error when auto-generating the local gateway token fails", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+      },
+    });
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "local",
+        },
+      },
+      config: {
+        gateway: {
+          mode: "local",
+        },
+      },
+      hash: "hash",
+    });
+    replaceConfigFile.mockRejectedValue(new Error("disk full"));
+
     await expect(resolveGatewayConnection({})).rejects.toThrow(
-      "gateway.auth.mode is unset. Set gateway.auth.mode to token or password.",
+      "Failed to auto-configure a local gateway token: disk full",
     );
   });
 

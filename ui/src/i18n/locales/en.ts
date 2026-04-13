@@ -226,7 +226,8 @@ export const en: TranslationMap = {
       cronText: "Use isolated sessions for recurring runs.",
     },
     auth: {
-      required: "This gateway requires auth. Add a token or password, then click Connect.",
+      required:
+        "This gateway requires auth. Local installs usually fill this automatically; otherwise add a token or password, then click Connect.",
       failed:
         "Auth failed. Re-copy a tokenized URL with {command}, or update the token, then click Connect.",
     },

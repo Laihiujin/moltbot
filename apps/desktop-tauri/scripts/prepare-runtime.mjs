@@ -1,8 +1,18 @@
-import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import * as tar from "tar";
+
+const BUNDLED_RUNTIME_ENTRIES = ["package.json", "dist", "node_modules", "docs"];
+const FORBIDDEN_RUNTIME_STATE_ENTRIES = [
+  ".openclaw",
+  "openclaw.json",
+  "models.json",
+  "secrets.json",
+  "channel-bindings.json",
+  "bindings.json",
+];
 
 function runOrThrow(command, args, cwd, useShell = false) {
   const result = spawnSync(command, args, {
@@ -20,15 +30,55 @@ function runOrThrow(command, args, cwd, useShell = false) {
   }
 }
 
+function resolveTauriSidecarBinaryName() {
+  if (process.platform === "win32" && process.arch === "x64") {
+    return "node-x86_64-pc-windows-msvc.exe";
+  }
+  if (process.platform === "darwin" && process.arch === "arm64") {
+    return "node-aarch64-apple-darwin";
+  }
+  if (process.platform === "darwin" && process.arch === "x64") {
+    return "node-x86_64-apple-darwin";
+  }
+  if (process.platform === "linux" && process.arch === "x64") {
+    return "node-x86_64-unknown-linux-gnu";
+  }
+  if (process.platform === "linux" && process.arch === "arm64") {
+    return "node-aarch64-unknown-linux-gnu";
+  }
+  throw new Error(`Unsupported desktop bundle host: ${process.platform}/${process.arch}`);
+}
+
 function ensureNodeBinary(desktopTauriSrcTauriDir) {
-  const targetBinary = join(desktopTauriSrcTauriDir, "binaries", "node-x86_64-pc-windows-msvc.exe");
+  const binariesDir = join(desktopTauriSrcTauriDir, "binaries");
+  const targetBinary = join(desktopTauriSrcTauriDir, "binaries", resolveTauriSidecarBinaryName());
   const sourceNodeBinary = process.execPath;
   if (!existsSync(sourceNodeBinary)) {
     throw new Error(`Unable to find Node executable at: ${sourceNodeBinary}`);
   }
 
   mkdirSync(dirname(targetBinary), { recursive: true });
+  for (const entry of readdirSync(binariesDir, { withFileTypes: true })) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (entry.name.startsWith("gateway-") || entry.name.startsWith("node-")) {
+      safeRm(join(binariesDir, entry.name));
+    }
+  }
   cpSync(sourceNodeBinary, targetBinary);
+  if (process.platform !== "win32") {
+    chmodSync(targetBinary, 0o755);
+  }
+}
+
+function assertNoBundledUserState(runtimeOpenclawDir) {
+  for (const name of FORBIDDEN_RUNTIME_STATE_ENTRIES) {
+    const path = join(runtimeOpenclawDir, name);
+    if (existsSync(path)) {
+      throw new Error(`Refusing to bundle local runtime state into installer: ${path}`);
+    }
+  }
 }
 
 function safeRm(path) {
@@ -88,6 +138,8 @@ async function main() {
     );
   }
 
+  assertNoBundledUserState(runtimeOpenclawDir);
+
   await tar.c(
     {
       cwd: runtimeOpenclawDir,
@@ -95,7 +147,7 @@ async function main() {
       gzip: true,
       portable: true,
     },
-    ["package.json", "dist", "node_modules", "docs"],
+    BUNDLED_RUNTIME_ENTRIES,
   );
 }
 

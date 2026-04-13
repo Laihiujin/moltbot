@@ -4,4 +4,6 @@ export type ControlUiBootstrapConfig = {
   basePath: string;
   assistantName: string;
   assistantAvatar: string;
+  token?: string;
+  password?: string;
 };

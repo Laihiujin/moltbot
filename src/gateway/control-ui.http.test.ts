@@ -27,6 +27,8 @@ describe("handleControlUiHttpRequest", () => {
       basePath: string;
       assistantName: string;
       assistantAvatar: string;
+      token?: string;
+      password?: string;
     };
   }
 
@@ -40,7 +42,7 @@ describe("handleControlUiHttpRequest", () => {
     expect(params.end).toHaveBeenCalledWith("Not Found");
   }
 
-  function runControlUiRequest(params: {
+  async function runControlUiRequest(params: {
     url: string;
     method: "GET" | "HEAD" | "POST";
     rootPath: string;
@@ -48,7 +50,7 @@ describe("handleControlUiHttpRequest", () => {
     rootKind?: "resolved" | "bundled";
   }) {
     const { res, end } = makeMockHttpResponse();
-    const handled = handleControlUiHttpRequest(
+    const handled = await handleControlUiHttpRequest(
       { url: params.url, method: params.method } as IncomingMessage,
       res,
       {
@@ -113,7 +115,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res, setHeader } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: "/", method: "GET" } as IncomingMessage,
           res,
           {
@@ -139,7 +141,7 @@ describe("handleControlUiHttpRequest", () => {
       indexHtml: html,
       fn: async (tmp) => {
         const { res, setHeader } = makeMockHttpResponse();
-        handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
+        await handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
           root: { kind: "resolved", path: tmp },
         });
         const cspCalls = setHeader.mock.calls.filter(
@@ -158,7 +160,7 @@ describe("handleControlUiHttpRequest", () => {
       indexHtml: html,
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: "/", method: "GET" } as IncomingMessage,
           res,
           {
@@ -179,7 +181,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
           res,
           {
@@ -195,6 +197,8 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.basePath).toBe("");
         expect(parsed.assistantName).toBe("</script><script>alert(1)//");
         expect(parsed.assistantAvatar).toBe("/avatar/main");
+        expect(parsed.token).toBeUndefined();
+        expect(parsed.password).toBeUndefined();
         expect(parsed).not.toHaveProperty("assistantAgentId");
         expect(parsed).not.toHaveProperty("serverVersion");
       },
@@ -205,7 +209,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, method: "GET" } as IncomingMessage,
           res,
           {
@@ -224,6 +228,61 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAvatar).toBe("/openclaw/avatar/main");
         expect(parsed).not.toHaveProperty("assistantAgentId");
         expect(parsed).not.toHaveProperty("serverVersion");
+      },
+    });
+  });
+
+  it("includes bootstrap auth only when explicitly allowed", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            revealBootstrapAuth: true,
+            config: {
+              gateway: {
+                mode: "local",
+              },
+            },
+          },
+        );
+        expect(handled).toBe(true);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.token).toMatch(/^[0-9a-f]{48}$/);
+        expect(parsed.password).toBeUndefined();
+      },
+    });
+  });
+
+  it("ignores inactive password values when bootstrap auth is in token mode", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            revealBootstrapAuth: true,
+            config: {
+              gateway: {
+                mode: "local",
+                auth: {
+                  mode: "token",
+                  token: "config-token",
+                  password: "stale-password",
+                },
+              },
+            },
+          },
+        );
+        expect(handled).toBe(true);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.token).toBe("config-token");
+        expect(parsed.password).toBeUndefined();
       },
     });
   });
@@ -282,7 +341,7 @@ describe("handleControlUiHttpRequest", () => {
           await fs.symlink(outsideFile, path.join(assetsDir, "leak.txt"));
 
           const { res, end } = makeMockHttpResponse();
-          const handled = handleControlUiHttpRequest(
+          const handled = await handleControlUiHttpRequest(
             { url: "/assets/leak.txt", method: "GET" } as IncomingMessage,
             res,
             {
@@ -303,7 +362,7 @@ describe("handleControlUiHttpRequest", () => {
         const { assetsDir, filePath } = await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
         await fs.symlink(filePath, path.join(assetsDir, "linked.txt"));
 
-        const { res, end, handled } = runControlUiRequest({
+        const { res, end, handled } = await runControlUiRequest({
           url: "/assets/linked.txt",
           method: "GET",
           rootPath: tmp,
@@ -321,7 +380,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
 
-        const { res, end, handled } = runControlUiRequest({
+        const { res, end, handled } = await runControlUiRequest({
           url: "/assets/actual.txt",
           method: "HEAD",
           rootPath: tmp,
@@ -344,7 +403,7 @@ describe("handleControlUiHttpRequest", () => {
           await fs.rm(path.join(tmp, "index.html"));
           await fs.symlink(outsideIndex, path.join(tmp, "index.html"));
 
-          const { res, end, handled } = runControlUiRequest({
+          const { res, end, handled } = await runControlUiRequest({
             url: "/app/route",
             method: "GET",
             rootPath: tmp,
@@ -367,7 +426,7 @@ describe("handleControlUiHttpRequest", () => {
           await fs.rm(path.join(tmp, "index.html"));
           await fs.link(outsideIndex, path.join(tmp, "index.html"));
 
-          const { res, end, handled } = runControlUiRequest({
+          const { res, end, handled } = await runControlUiRequest({
             url: "/",
             method: "GET",
             rootPath: tmp,
@@ -385,7 +444,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         await createHardlinkedAssetFile(tmp);
 
-        const { res, end, handled } = runControlUiRequest({
+        const { res, end, handled } = await runControlUiRequest({
           url: "/assets/app.hl.js",
           method: "GET",
           rootPath: tmp,
@@ -403,7 +462,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         await createHardlinkedAssetFile(tmp);
 
-        const { res, end, handled } = runControlUiRequest({
+        const { res, end, handled } = await runControlUiRequest({
           url: "/assets/app.hl.js",
           method: "GET",
           rootPath: tmp,
@@ -422,7 +481,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         for (const webhookPath of ["/bluebubbles-webhook", "/custom-webhook", "/callback"]) {
           const { res } = makeMockHttpResponse();
-          const handled = handleControlUiHttpRequest(
+          const handled = await handleControlUiHttpRequest(
             { url: webhookPath, method: "POST" } as IncomingMessage,
             res,
             { root: { kind: "resolved", path: tmp } },
@@ -439,7 +498,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: "/bluebubbles-webhook", method: "POST" } as IncomingMessage,
           res,
           { basePath: "/openclaw", root: { kind: "resolved", path: tmp } },
@@ -453,7 +512,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         for (const apiPath of ["/api", "/api/sessions", "/api/channels/nostr"]) {
-          const { handled } = runControlUiRequest({
+          const { handled } = await runControlUiRequest({
             url: apiPath,
             method: "GET",
             rootPath: tmp,
@@ -468,7 +527,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         for (const pluginPath of ["/plugins", "/plugins/diffs/view/abc/def"]) {
-          const { handled } = runControlUiRequest({
+          const { handled } = await runControlUiRequest({
             url: pluginPath,
             method: "GET",
             rootPath: tmp,
@@ -482,7 +541,7 @@ describe("handleControlUiHttpRequest", () => {
   it("falls through POST requests when basePath is empty", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const { handled, end } = runControlUiRequest({
+        const { handled, end } = await runControlUiRequest({
           url: "/webhook/bluebubbles",
           method: "POST",
           rootPath: tmp,
@@ -497,7 +556,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         for (const route of ["/openclaw", "/openclaw/", "/openclaw/some-page"]) {
-          const { handled, end } = runControlUiRequest({
+          const { handled, end } = await runControlUiRequest({
             url: route,
             method: "POST",
             rootPath: tmp,
@@ -519,7 +578,7 @@ describe("handleControlUiHttpRequest", () => {
 
         const secretPathUrl = secretPath.split(path.sep).join("/");
         const absolutePathUrl = secretPathUrl.startsWith("/") ? secretPathUrl : `/${secretPathUrl}`;
-        const { res, end, handled } = runControlUiRequest({
+        const { res, end, handled } = await runControlUiRequest({
           url: `/openclaw/${absolutePathUrl}`,
           method: "GET",
           rootPath: root,
@@ -548,7 +607,7 @@ describe("handleControlUiHttpRequest", () => {
           throw error;
         }
 
-        const { res, end, handled } = runControlUiRequest({
+        const { res, end, handled } = await runControlUiRequest({
           url: "/openclaw/assets/leak.txt",
           method: "GET",
           rootPath: root,
