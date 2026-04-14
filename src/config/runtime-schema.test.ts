@@ -1,4 +1,12 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryKey,
+  getActivePluginRegistryVersion,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 const mockLoadConfig = vi.hoisted(() => vi.fn<() => OpenClawConfig>());
@@ -144,6 +152,10 @@ beforeAll(async () => {
     await import("./runtime-schema.js"));
 });
 
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+});
+
 describe("readBestEffortRuntimeConfigSchema", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -185,7 +197,7 @@ describe("readBestEffortRuntimeConfigSchema", () => {
     );
     expect(channelProps?.telegram).toBeTruthy();
     expect(channelProps?.slack).toBeTruthy();
-    expect(entryProps?.demo).toBeUndefined();
+    expect(entryProps?.demo).toBeTruthy();
   });
 });
 
@@ -212,25 +224,29 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(channelProps?.matrix).toBeTruthy();
   });
 
-  it("reuses the cached gateway schema for the same config and manifest registry", () => {
+  it("reuses the cached gateway schema without replacing the active plugin registry", () => {
+    // Each MCP connection triggers a config.schema / config.get gateway request which calls
+    // loadGatewayRuntimeConfigSchema. The original bug caused a fresh full plugin registry to
+    // be activated on every call, re-running registerFull for all channel plugins including
+    // Feishu. Verify that repeated calls keep using manifest metadata without replacing the
+    // already-active runtime registry or mutating its activation version.
+    const activeRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(activeRegistry, "startup-registry");
+    const versionBefore = getActivePluginRegistryVersion();
+
     const first = loadGatewayRuntimeConfigSchema();
     const second = loadGatewayRuntimeConfigSchema();
 
     expect(first).toBe(second);
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(2);
-    expect(mockLoadPluginManifestRegistry).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
+    for (const call of mockLoadPluginManifestRegistry.mock.calls) {
+      expect(call[0]).toMatchObject({
         config: { plugins: { entries: { demo: { enabled: true } } } },
         cache: true,
-      }),
-    );
-    expect(mockLoadPluginManifestRegistry).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        config: { plugins: { entries: { demo: { enabled: true } } } },
-        cache: true,
-      }),
-    );
+      });
+    }
+    expect(getActivePluginRegistry()).toBe(activeRegistry);
+    expect(getActivePluginRegistryKey()).toBe("startup-registry");
+    expect(getActivePluginRegistryVersion()).toBe(versionBefore);
   });
 });

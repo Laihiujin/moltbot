@@ -1,6 +1,7 @@
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
+  type ControlUiEmbedSandboxMode,
 } from "../../../../src/gateway/control-ui-contract.js";
 import { normalizeAssistantIdentity } from "../assistant-identity.ts";
 import { normalizeBasePath } from "../navigation.ts";
@@ -15,6 +16,9 @@ export type ControlUiBootstrapState = {
   settings?: UiSettings;
   password?: string;
   applySettings?: (next: UiSettings) => void;
+  localMediaPreviewRoots: string[];
+  embedSandboxMode: ControlUiEmbedSandboxMode;
+  allowExternalEmbedUrls: boolean;
 };
 
 type TauriBootstrapAccess = {
@@ -146,11 +150,24 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
       password: parsed.password ?? null,
     });
     const normalized = normalizeAssistantIdentity({
+      agentId: parsed.assistantAgentId ?? null,
       name: parsed.assistantName,
       avatar: parsed.assistantAvatar ?? null,
     });
     state.assistantName = normalized.name;
     state.assistantAvatar = normalized.avatar;
+    state.assistantAgentId = normalized.agentId ?? null;
+    state.serverVersion = parsed.serverVersion ?? null;
+    state.localMediaPreviewRoots = Array.isArray(parsed.localMediaPreviewRoots)
+      ? parsed.localMediaPreviewRoots.filter((value): value is string => typeof value === "string")
+      : [];
+    state.embedSandboxMode =
+      parsed.embedSandbox === "trusted"
+        ? "trusted"
+        : parsed.embedSandbox === "strict"
+          ? "strict"
+          : "scripts";
+    state.allowExternalEmbedUrls = parsed.allowExternalEmbedUrls === true;
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
   }
