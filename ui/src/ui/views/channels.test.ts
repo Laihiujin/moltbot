@@ -192,4 +192,44 @@ describe("channel cards", () => {
     expect(cards[0]?.querySelector(".channel-card__body")).not.toBeNull();
     expect(cards[1]?.querySelector(".channel-card__body")).toBeNull();
   });
+
+  it("surfaces schema-defined channels even when the health snapshot only includes configured ones", () => {
+    const props = {
+      ...createProps({
+        ts: Date.now(),
+        channelOrder: ["feishu"],
+        channelLabels: { feishu: "Feishu" },
+        channels: {
+          feishu: { configured: true, running: true },
+        },
+        channelAccounts: {},
+        channelDefaultAccountId: {},
+      }),
+      configSchema: {
+        type: "object",
+        properties: {
+          channels: {
+            type: "object",
+            properties: {
+              feishu: { type: "object", title: "Feishu" },
+              qqbot: { type: "object", title: "QQ Bot" },
+              discord: { type: "object", title: "Discord" },
+              imessage: { type: "object", title: "iMessage" },
+              telegram: { type: "object", title: "Telegram" },
+              twitter: { type: "object", title: "Twitter" },
+            },
+          },
+        },
+      },
+    } satisfies ChannelsProps;
+    const container = document.createElement("div");
+
+    render(renderChannels(props), container);
+
+    expect(container.textContent).toContain("QQ Bot");
+    expect(container.textContent).toContain("Discord");
+    expect(container.textContent).toContain("iMessage");
+    expect(container.textContent).toContain("Telegram");
+    expect(container.textContent).toContain("Twitter");
+  });
 });

@@ -193,6 +193,134 @@ describe("loadConfigSchema", () => {
     expect(second.configSchemaVersion).toBe("cached-version");
     expect(second.configUiHints.tools).toEqual({ label: "Tools" });
   });
+
+  it("falls back to per-section requests when a grouped schema request fails", async () => {
+    const request = vi.fn().mockImplementation(async (method: string, params?: unknown) => {
+      if (method !== "config.schema") {
+        return {};
+      }
+      const sections =
+        params &&
+        typeof params === "object" &&
+        Array.isArray((params as { sections?: unknown[] }).sections)
+          ? ((params as { sections?: string[] }).sections ?? [])
+          : [];
+      if (sections.length > 1) {
+        throw new Error("payload too large");
+      }
+      const section = sections[0];
+      if (section === "models-split") {
+        return {
+          schema: {
+            type: "object",
+            properties: {
+              models: { type: "object", properties: {} },
+            },
+            required: ["models"],
+          },
+          uiHints: {
+            models: { label: "Models" },
+          },
+          version: "split-version",
+          generatedAt: "generated",
+        };
+      }
+      return {
+        schema: {
+          type: "object",
+          properties: {
+            agents: { type: "object", properties: {} },
+          },
+        },
+        uiHints: {
+          agents: { label: "Agents" },
+        },
+        version: "split-version",
+        generatedAt: "generated",
+      };
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await loadConfigSchema(state, { sections: ["models-split", "agents-split"] });
+
+    expect(request.mock.calls[0]).toEqual([
+      "config.schema",
+      { sections: ["models-split", "agents-split"] },
+    ]);
+    expect(request.mock.calls[1]).toEqual(["config.schema", { sections: ["models-split"] }]);
+    expect(request.mock.calls[2]).toEqual(["config.schema", { sections: ["agents-split"] }]);
+    expect(state.configSchema).toEqual({
+      type: "object",
+      properties: {
+        models: { type: "object", properties: {} },
+        agents: { type: "object", properties: {} },
+      },
+      required: ["models"],
+    });
+    expect(state.configUiHints).toEqual({
+      models: { label: "Models" },
+      agents: { label: "Agents" },
+    });
+  });
+
+  it("falls back to the full schema when the gateway rejects the sections param", async () => {
+    const request = vi.fn().mockImplementation(async (method: string, params?: unknown) => {
+      if (method !== "config.schema") {
+        return {};
+      }
+      const hasSections =
+        Boolean(params) &&
+        typeof params === "object" &&
+        Object.prototype.hasOwnProperty.call(params, "sections");
+      if (hasSections) {
+        throw new Error(
+          "GatewayRequestError: invalid config.schema params: at root: unexpected property 'sections'",
+        );
+      }
+      return {
+        schema: {
+          type: "object",
+          properties: {
+            channels: {
+              type: "object",
+              properties: {
+                feishu: { type: "object", title: "Feishu" },
+                discord: { type: "object", title: "Discord" },
+              },
+            },
+          },
+        },
+        uiHints: {
+          channels: { label: "Channels" },
+        },
+        version: "legacy-version",
+        generatedAt: "legacy-generated-at",
+      };
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await loadConfigSchema(state, { sections: ["channels"] });
+
+    expect(request.mock.calls[0]).toEqual(["config.schema", { sections: ["channels"] }]);
+    expect(request.mock.calls[1]).toEqual(["config.schema", {}]);
+    expect(state.configSchema).toEqual({
+      type: "object",
+      properties: {
+        channels: {
+          type: "object",
+          properties: {
+            feishu: { type: "object", title: "Feishu" },
+            discord: { type: "object", title: "Discord" },
+          },
+        },
+      },
+    });
+    expect(state.configSchemaVersion).toBe("legacy-version");
+  });
 });
 
 describe("updateConfigFormValue", () => {

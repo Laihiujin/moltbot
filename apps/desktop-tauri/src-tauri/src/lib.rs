@@ -1,8 +1,11 @@
 use flate2::read::GzDecoder;
 use serde::Serialize;
 use std::fs::{self, File};
+use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 use tar::Archive;
 use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -43,12 +46,17 @@ fn check_onboarding_needed() -> bool {
 
 #[tauri::command]
 fn write_config(json: String) -> Result<(), String> {
+    write_merged_config_value(
+        serde_json::from_str(&json).map_err(|e| format!("Invalid JSON: {e}"))?,
+    )
+    .map(|_| ())
+}
+
+fn write_merged_config_value(new_val: serde_json::Value) -> Result<serde_json::Value, String> {
     let path = config_path();
     if let Some(p) = path.parent() {
         std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
     }
-    let new_val: serde_json::Value =
-        serde_json::from_str(&json).map_err(|e| format!("Invalid JSON: {e}"))?;
     let merged = if path.exists() {
         let existing: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap_or_default())
@@ -66,7 +74,8 @@ fn write_config(json: String) -> Result<(), String> {
         &path,
         serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?,
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    Ok(merged)
 }
 
 /// Called from JS after saving config — navigates window to Control UI
@@ -83,11 +92,15 @@ fn bootstrap_gateway_access(
     app: tauri::AppHandle,
     state: tauri::State<'_, DesktopState>,
 ) -> Result<GatewayBootstrap, String> {
-    ensure_gateway_running(&app, state.gateway.clone())?;
+    let token = read_gateway_token_from_config();
+    let password = read_gateway_password_from_config();
+    if token.is_some() || password.is_some() {
+        ensure_gateway_running(&app, state.gateway.clone())?;
+    }
     Ok(GatewayBootstrap {
         gateway_url: "ws://127.0.0.1:18789".to_string(),
-        token: read_gateway_token_from_config(),
-        password: read_gateway_password_from_config(),
+        token,
+        password,
     })
 }
 
@@ -262,6 +275,22 @@ fn maybe_migrate_config_file() -> Result<bool, String> {
     Ok(true)
 }
 
+fn has_desktop_gateway_auth() -> bool {
+    read_gateway_token_from_config().is_some() || read_gateway_password_from_config().is_some()
+}
+
+fn wait_for_local_gateway_ready(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    let addr: SocketAddr = "127.0.0.1:18789".parse().expect("hardcoded gateway socket address");
+    while Instant::now() < deadline {
+        if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    false
+}
+
 fn runtime_cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     if let Ok(path) = app.path().app_local_data_dir() {
         return Ok(path.join("runtime").join(env!("CARGO_PKG_VERSION")));
@@ -320,7 +349,14 @@ fn resolve_gateway_runtime_dir(app: &tauri::AppHandle) -> Result<PathBuf, String
 
 fn ensure_gateway_running(app: &tauri::AppHandle, child_arc: GatewayChild) -> Result<(), String> {
     if child_arc.lock().map_err(|e| e.to_string())?.is_some() {
-        return Ok(());
+        if wait_for_local_gateway_ready(Duration::from_millis(400)) {
+            return Ok(());
+        }
+        if let Ok(mut guard) = child_arc.lock() {
+            if let Some(proc) = guard.take() {
+                let _ = proc.kill();
+            }
+        }
     }
     let runtime_dir = resolve_gateway_runtime_dir(app)?;
     let index_js = runtime_dir.join("dist").join("index.js");
@@ -389,6 +425,10 @@ fn ensure_gateway_running(app: &tauri::AppHandle, child_arc: GatewayChild) -> Re
             }
         }
     });
+    if !wait_for_local_gateway_ready(Duration::from_secs(8)) {
+        stop_gateway_process(child_arc.clone());
+        return Err("Gateway start timed out waiting for 127.0.0.1:18789".to_string());
+    }
     Ok(())
 }
 
@@ -471,8 +511,12 @@ pub fn run() {
             }
 
             // Launch gateway sidecar
-            if let Err(err) = ensure_gateway_running(app.handle(), app.state::<DesktopState>().gateway.clone()) {
-                log::warn!("Gateway startup skipped: {err}");
+            if has_desktop_gateway_auth() {
+                if let Err(err) = ensure_gateway_running(app.handle(), app.state::<DesktopState>().gateway.clone()) {
+                    log::warn!("Gateway startup skipped: {err}");
+                }
+            } else {
+                log::info!("Gateway startup deferred until desktop bootstrap creates auth.");
             }
 
             let tray_icon = app

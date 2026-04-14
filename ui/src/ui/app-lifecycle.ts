@@ -22,6 +22,7 @@ type LifecycleHost = {
   basePath: string;
   client?: { stop: () => void } | null;
   connectGeneration: number;
+  gatewayBootstrapBusy?: boolean;
   connected?: boolean;
   settings?: import("./storage.ts").UiSettings;
   applySettings?: (next: import("./storage.ts").UiSettings) => void;
@@ -50,11 +51,13 @@ export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
+  host.gatewayBootstrapBusy = true;
   const bootstrapReady = loadControlUiBootstrapConfig(host);
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
   window.addEventListener("popstate", host.popStateHandler);
   void bootstrapReady.finally(() => {
+    host.gatewayBootstrapBusy = false;
     if (host.connectGeneration !== connectGeneration) {
       return;
     }
@@ -75,6 +78,7 @@ export function handleFirstUpdated(host: LifecycleHost) {
 
 export function handleDisconnected(host: LifecycleHost) {
   host.connectGeneration += 1;
+  host.gatewayBootstrapBusy = false;
   window.removeEventListener("popstate", host.popStateHandler);
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);

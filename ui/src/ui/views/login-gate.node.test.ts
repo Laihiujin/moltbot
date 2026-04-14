@@ -52,6 +52,21 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
 }
 
 describe("renderLoginGate", () => {
+  it("shows a bootstrap message instead of the manual form while desktop access is preparing", () => {
+    const container = document.createElement("div");
+    render(
+      renderLoginGate(
+        createState({
+          gatewayBootstrapBusy: true,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Preparing local gateway access");
+    expect(container.querySelector('input[placeholder="OPENCLAW_GATEWAY_TOKEN"]')).toBeNull();
+  });
+
   it("hides the password input by default", () => {
     const container = document.createElement("div");
     render(renderLoginGate(createState()), container);

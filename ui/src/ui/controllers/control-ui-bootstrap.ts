@@ -94,7 +94,7 @@ async function loadDesktopGatewayBootstrap(state: ControlUiBootstrapState) {
     return;
   }
   try {
-    const result = (await invoke("bootstrap_gateway_access")) as TauriBootstrapAccess;
+    let result = (await invoke("bootstrap_gateway_access")) as TauriBootstrapAccess;
     const gatewayUrl =
       typeof result.gateway_url === "string" && result.gateway_url.trim()
         ? result.gateway_url.trim()
@@ -113,7 +113,9 @@ async function loadDesktopGatewayBootstrap(state: ControlUiBootstrapState) {
           },
         }),
       });
-      token = autoToken;
+      result = (await invoke("bootstrap_gateway_access")) as TauriBootstrapAccess;
+      token =
+        typeof result.token === "string" && result.token.trim() ? result.token : autoToken;
     }
     applyBootstrapGatewayAuth(state, { gatewayUrl, token, password });
   } catch {

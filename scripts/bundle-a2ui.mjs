@@ -2,6 +2,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -12,6 +13,7 @@ const hashFile = path.join(rootDir, "src", "canvas-host", "a2ui", ".bundle.hash"
 const outputFile = path.join(rootDir, "src", "canvas-host", "a2ui", "a2ui.bundle.js");
 const a2uiRendererDir = path.join(rootDir, "vendor", "a2ui", "renderers", "lit");
 const a2uiAppDir = path.join(rootDir, "apps", "shared", "OpenClawKit", "Tools", "CanvasA2UI");
+const a2uiTscConfig = path.join(a2uiRendererDir, ".openclaw-tsconfig.build.json");
 const inputPaths = [
   path.join(rootDir, "package.json"),
   path.join(rootDir, "pnpm-lock.yaml"),
@@ -29,6 +31,16 @@ function fail(message) {
   console.error("If this persists, verify pnpm deps and try again.");
   process.exit(1);
 }
+
+function cleanupGeneratedTscConfig() {
+  try {
+    fsSync.rmSync(a2uiTscConfig, { force: true });
+  } catch {
+    // Best effort cleanup only; a stale temp config should not mask the real failure.
+  }
+}
+
+process.once("exit", cleanupGeneratedTscConfig);
 
 async function pathExists(targetPath) {
   try {
@@ -130,6 +142,21 @@ async function computeHash() {
   return hash.digest("hex");
 }
 
+async function writeBuildTscConfig() {
+  await fs.writeFile(
+    a2uiTscConfig,
+    `${JSON.stringify(
+      {
+        extends: "./tsconfig.json",
+        exclude: ["**/*.test.ts", "**/*.test.tsx"],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
 function runStep(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: rootDir,
@@ -183,7 +210,9 @@ async function main() {
     }
   }
 
-  runPnpm(["-s", "exec", "tsc", "-p", path.join(a2uiRendererDir, "tsconfig.json")]);
+  await writeBuildTscConfig();
+  runPnpm(["-s", "exec", "tsc", "-p", a2uiTscConfig]);
+  cleanupGeneratedTscConfig();
 
   const localRolldownCliCandidates = getLocalRolldownCliCandidates(rootDir);
   const localRolldownCli = (

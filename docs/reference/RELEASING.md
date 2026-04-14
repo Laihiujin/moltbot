@@ -100,6 +100,24 @@ OpenClaw has three public release lanes:
     `preflight_run_id` and `validate_run_id`
   - the real publish paths promote prepared artifacts instead of rebuilding
     them again
+  - desktop release automation now lives in this repo:
+    - `.github/workflows/tauri-windows.yml`
+    - `.github/workflows/tauri-macos-arm64.yml`
+  - both desktop workflows run validation-only lanes on push and pull request
+  - both desktop workflows use manual `workflow_dispatch` release lanes with
+    `tag`, `draft`, and `prerelease` inputs
+  - both desktop workflows force `OPENCLAW_DESKTOP_AUTO_BUMP=0` so the
+    committed desktop version remains the release version
+  - the Windows release lane signs NSIS and MSI installers, verifies the
+    Authenticode signatures, runs separate smoke install jobs, and uploads the
+    installers plus a SHA256 manifest to the matching GitHub release
+  - local unsigned Windows builds are validation-only artifacts; official
+    distribution must be rebuilt in the signing environment through
+    `.github/workflows/tauri-windows.yml` before upload
+  - the macOS release lane imports the signing certificate into a temporary
+    keychain, signs the app, notarizes and staples the `.app` and `.dmg`,
+    packages `.zip` and `.dSYM.zip`, and uploads those assets to the matching
+    GitHub release
 - For stable correction releases like `YYYY.M.D-N`, the post-publish verifier
   also checks the same temp-prefix upgrade path from `YYYY.M.D` to `YYYY.M.D-N`
   so release corrections cannot silently leave older global installs on the
