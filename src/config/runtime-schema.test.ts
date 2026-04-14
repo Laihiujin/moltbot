@@ -197,7 +197,7 @@ describe("readBestEffortRuntimeConfigSchema", () => {
     );
     expect(channelProps?.telegram).toBeTruthy();
     expect(channelProps?.slack).toBeTruthy();
-    expect(entryProps?.demo).toBeTruthy();
+    expect(entryProps?.demo).toBeUndefined();
   });
 });
 
