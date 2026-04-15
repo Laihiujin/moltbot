@@ -822,4 +822,59 @@ describe("loadChatHistory", () => {
     ]);
     expect(state.chatThinkingLevel).toBe("low");
   });
+
+  it("preserves optimistic local messages while a run is active", async () => {
+    const optimisticUserMessage = {
+      role: "user",
+      content: [{ type: "text", text: "帮我接入 iMessage" }],
+      timestamp: 1_710_000_000_000,
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "之前的回复" }], timestamp: 10 },
+      ],
+      thinkingLevel: "adaptive",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [optimisticUserMessage],
+      chatSending: true,
+      chatRunId: "run-1",
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "之前的回复" }], timestamp: 10 },
+      optimisticUserMessage,
+    ]);
+    expect(state.chatThinkingLevel).toBe("adaptive");
+  });
+
+  it("preserves a recent local user message after run state clears", async () => {
+    const optimisticUserMessage = {
+      role: "user",
+      content: [{ type: "text", text: "你的权限满么？帮我接入 iMessage" }],
+      timestamp: Date.now(),
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "旧回复" }], timestamp: 10 }],
+      thinkingLevel: "adaptive",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [optimisticUserMessage],
+      chatSending: false,
+      chatRunId: null,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "旧回复" }], timestamp: 10 },
+      optimisticUserMessage,
+    ]);
+  });
 });
