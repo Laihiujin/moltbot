@@ -5,6 +5,8 @@ type TestMock<TArgs extends unknown[] = unknown[], TResult = unknown> = Mock<
 >;
 
 export const loadConfigMock: TestMock = vi.fn();
+export const readConfigFileSnapshotMock: TestMock = vi.fn();
+export const replaceConfigFileMock: TestMock = vi.fn();
 export const resolveGatewayPortMock: TestMock = vi.fn();
 export const resolveStateDirMock: TestMock<[NodeJS.ProcessEnv], string> = vi.fn(
   (env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw",

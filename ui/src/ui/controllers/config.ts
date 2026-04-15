@@ -36,6 +36,120 @@ export type ConfigState = {
   lastError: string | null;
 };
 
+type LoadConfigSchemaOptions = {
+  sections?: string[];
+};
+
+const configSchemaCache = new Map<string, ConfigSchemaResponse>();
+const configSchemaRequestCache = new Map<string, Promise<ConfigSchemaResponse>>();
+
+function isSchemaObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isUnsupportedSectionsError(error: unknown): boolean {
+  const message = String(error ?? "");
+  return (
+    message.includes("config.schema") &&
+    message.includes("sections") &&
+    message.includes("unexpected property")
+  );
+}
+
+function mergeConfigSchemaResponses(entries: ConfigSchemaResponse[]): ConfigSchemaResponse {
+  if (entries.length === 0) {
+    return {
+      schema: {},
+      uiHints: {},
+      version: "",
+      generatedAt: "",
+    };
+  }
+  if (entries.length === 1) {
+    return entries[0];
+  }
+
+  const rootSchema = entries
+    .map((entry) => entry.schema)
+    .find((schema) => isSchemaObject(schema) && isSchemaObject(schema.properties));
+  if (!isSchemaObject(rootSchema) || !isSchemaObject(rootSchema.properties)) {
+    return entries[0];
+  }
+
+  const mergedProperties: Record<string, unknown> = {};
+  const mergedRequired = new Set<string>();
+  const mergedHints: ConfigUiHints = {};
+
+  for (const entry of entries) {
+    const schema = entry.schema;
+    if (isSchemaObject(schema) && isSchemaObject(schema.properties)) {
+      Object.assign(mergedProperties, schema.properties);
+      const required = Array.isArray(schema.required)
+        ? schema.required.filter((item): item is string => typeof item === "string")
+        : [];
+      for (const key of required) {
+        mergedRequired.add(key);
+      }
+    }
+    Object.assign(mergedHints, entry.uiHints ?? {});
+  }
+
+  return {
+    ...entries[0],
+    schema: {
+      ...rootSchema,
+      properties: mergedProperties,
+      ...(mergedRequired.size > 0 ? { required: Array.from(mergedRequired) } : {}),
+    },
+    uiHints: mergedHints,
+  };
+}
+
+async function requestConfigSchema(
+  client: GatewayBrowserClient,
+  options?: LoadConfigSchemaOptions,
+): Promise<ConfigSchemaResponse> {
+  const sections = Array.from(
+    new Set(options?.sections?.map((entry) => entry.trim()).filter(Boolean) ?? []),
+  );
+  try {
+    return await client.request<ConfigSchemaResponse>("config.schema", {
+      ...(sections.length ? { sections } : {}),
+    });
+  } catch (error) {
+    if (sections.length > 0 && isUnsupportedSectionsError(error)) {
+      return client.request<ConfigSchemaResponse>("config.schema", {});
+    }
+    if (sections.length <= 1) {
+      throw error;
+    }
+    let perSection: ConfigSchemaResponse[];
+    try {
+      perSection = await Promise.all(
+        sections.map((section) =>
+          client.request<ConfigSchemaResponse>("config.schema", {
+            sections: [section],
+          }),
+        ),
+      );
+    } catch (perSectionError) {
+      if (isUnsupportedSectionsError(perSectionError)) {
+        return client.request<ConfigSchemaResponse>("config.schema", {});
+      }
+      throw perSectionError;
+    }
+    return mergeConfigSchemaResponses(perSection);
+  }
+}
+
+function buildConfigSchemaCacheKey(options?: LoadConfigSchemaOptions): string {
+  const sections = Array.from(
+    new Set(options?.sections?.map((entry) => entry.trim()).filter(Boolean) ?? []),
+  )
+    .toSorted((a, b) => a.localeCompare(b));
+  return sections.length > 0 ? `sections:${sections.join(",")}` : "full";
+}
+
 export async function loadConfig(state: ConfigState) {
   if (!state.client || !state.connected) {
     return;
@@ -52,20 +166,41 @@ export async function loadConfig(state: ConfigState) {
   }
 }
 
-export async function loadConfigSchema(state: ConfigState) {
+export async function loadConfigSchema(state: ConfigState, options?: LoadConfigSchemaOptions) {
   if (!state.client || !state.connected) {
     return;
   }
-  if (state.configSchemaLoading) {
+  const cacheKey = buildConfigSchemaCacheKey(options);
+  const cached = configSchemaCache.get(cacheKey);
+  if (cached) {
+    applyConfigSchema(state, cached);
     return;
   }
+
+  const pending = configSchemaRequestCache.get(cacheKey);
+  if (pending) {
+    state.configSchemaLoading = true;
+    try {
+      applyConfigSchema(state, await pending);
+    } catch (err) {
+      state.lastError = String(err);
+    } finally {
+      state.configSchemaLoading = false;
+    }
+    return;
+  }
+
   state.configSchemaLoading = true;
+  const requestPromise = requestConfigSchema(state.client, options);
+  configSchemaRequestCache.set(cacheKey, requestPromise);
   try {
-    const res = await state.client.request<ConfigSchemaResponse>("config.schema", {});
+    const res = await requestPromise;
+    configSchemaCache.set(cacheKey, res);
     applyConfigSchema(state, res);
   } catch (err) {
     state.lastError = String(err);
   } finally {
+    configSchemaRequestCache.delete(cacheKey);
     state.configSchemaLoading = false;
   }
 }

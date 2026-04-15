@@ -23,14 +23,53 @@ import { renderNostrCard } from "./channels.nostr.ts";
 import {
   channelEnabled,
   formatNullableBoolean,
+  isChannelCollapsed,
+  renderCollapsibleChannelCard,
   renderChannelAccountCount,
   resolveChannelDisplayState,
+  toggleChannelCollapsed,
 } from "./channels.shared.ts";
 import { renderSignalCard } from "./channels.signal.ts";
 import { renderSlackCard } from "./channels.slack.ts";
 import { renderTelegramCard } from "./channels.telegram.ts";
 import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./channels.types.ts";
 import { renderWhatsAppCard } from "./channels.whatsapp.ts";
+
+type JsonSchemaNode = {
+  type?: string | string[];
+  title?: string;
+  properties?: Record<string, JsonSchemaNode>;
+};
+
+const PREFERRED_CHANNEL_ORDER = [
+  "feishu",
+  "qq",
+  "qqbot",
+  "discord",
+  "imessage",
+  "telegram",
+  "twitter",
+  "whatsapp",
+  "googlechat",
+  "slack",
+  "signal",
+  "nostr",
+] as const;
+
+const CHANNEL_LABEL_FALLBACKS: Record<string, string> = {
+  discord: "Discord",
+  feishu: "Feishu",
+  googlechat: "Google Chat",
+  imessage: "iMessage",
+  nostr: "Nostr",
+  qq: "QQ",
+  qqbot: "QQ Bot",
+  signal: "Signal",
+  slack: "Slack",
+  telegram: "Telegram",
+  twitter: "Twitter",
+  whatsapp: "WhatsApp",
+};
 
 export function renderChannels(props: ChannelsProps) {
   const channels = props.snapshot?.channels as Record<string, unknown> | null;
@@ -42,7 +81,7 @@ export function renderChannels(props: ChannelsProps) {
   const signal = (channels?.signal ?? null) as SignalStatus | null;
   const imessage = (channels?.imessage ?? null) as IMessageStatus | null;
   const nostr = (channels?.nostr ?? null) as NostrStatus | null;
-  const channelOrder = resolveChannelOrder(props.snapshot);
+  const channelOrder = resolveChannelOrder(props.snapshot, props.configSchema);
   const orderedChannels = channelOrder
     .map((key, index) => ({
       key,
@@ -94,14 +133,21 @@ ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : t("channels.health.
   `;
 }
 
-function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
-  if (snapshot?.channelMeta?.length) {
-    return snapshot.channelMeta.map((entry) => entry.id);
+function resolveChannelOrder(
+  snapshot: ChannelsStatusSnapshot | null,
+  schema: unknown,
+): ChannelKey[] {
+  const snapshotIds = snapshot?.channelMeta?.length
+    ? snapshot.channelMeta.map((entry) => entry.id)
+    : snapshot?.channelOrder?.length
+      ? snapshot.channelOrder
+      : [];
+  const schemaIds = resolveSchemaChannelIds(schema);
+  const allIds = Array.from(new Set([...snapshotIds, ...schemaIds]));
+  if (allIds.length === 0) {
+    return [...PREFERRED_CHANNEL_ORDER];
   }
-  if (snapshot?.channelOrder?.length) {
-    return snapshot.channelOrder;
-  }
-  return ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage", "nostr"];
+  return allIds.toSorted((left, right) => compareChannelIds(left, right));
 }
 
 function renderChannel(key: ChannelKey, props: ChannelsProps, data: ChannelsChannelData) {
@@ -187,7 +233,7 @@ function renderGenericChannelCard(
   props: ChannelsProps,
   channelAccounts: Record<string, ChannelAccountSnapshot[]>,
 ) {
-  const label = resolveChannelLabel(props.snapshot, key);
+  const label = resolveChannelLabel(props.snapshot, key, props.configSchema);
   const displayState = resolveChannelDisplayState(key, props);
   const lastError =
     typeof displayState.status?.lastError === "string" ? displayState.status.lastError : undefined;
@@ -195,37 +241,41 @@ function renderGenericChannelCard(
   const accountCountLabel = renderChannelAccountCount(key, channelAccounts);
 
   return html`
-    <div class="card">
-      <div class="card-title">${label}</div>
-      <div class="card-sub">${t("channels.generic.subtitle")}</div>
-      ${accountCountLabel}
-      ${accounts.length > 0
-        ? html`
-            <div class="account-card-list">
-              ${accounts.map((account) => renderGenericAccount(account))}
-            </div>
-          `
-        : html`
-            <div class="status-list" style="margin-top: 16px;">
-              <div>
-                <span class="label">${t("common.configured")}</span>
-                <span>${formatNullableBoolean(displayState.configured)}</span>
+    ${renderCollapsibleChannelCard({
+      title: label,
+      subtitle: t("channels.generic.subtitle"),
+      collapsed: isChannelCollapsed(key, props),
+      onToggleCollapsed: toggleChannelCollapsed(key, props),
+      body: html`
+        ${accountCountLabel}
+        ${accounts.length > 0
+          ? html`
+              <div class="account-card-list">
+                ${accounts.map((account) => renderGenericAccount(account))}
               </div>
-              <div>
-                <span class="label">${t("common.running")}</span>
-                <span>${formatNullableBoolean(displayState.running)}</span>
+            `
+          : html`
+              <div class="status-list" style="margin-top: 16px;">
+                <div>
+                  <span class="label">${t("common.configured")}</span>
+                  <span>${formatNullableBoolean(displayState.configured)}</span>
+                </div>
+                <div>
+                  <span class="label">${t("common.running")}</span>
+                  <span>${formatNullableBoolean(displayState.running)}</span>
+                </div>
+                <div>
+                  <span class="label">${t("common.connected")}</span>
+                  <span>${formatNullableBoolean(displayState.connected)}</span>
+                </div>
               </div>
-              <div>
-                <span class="label">${t("common.connected")}</span>
-                <span>${formatNullableBoolean(displayState.connected)}</span>
-              </div>
-            </div>
-          `}
-      ${lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">${lastError}</div>`
-        : nothing}
-      ${renderChannelConfigSection({ channelId: key, props })}
-    </div>
+            `}
+        ${lastError
+          ? html`<div class="callout danger" style="margin-top: 12px;">${lastError}</div>`
+          : nothing}
+        ${renderChannelConfigSection({ channelId: key, props })}
+      `,
+    })}
   `;
 }
 
@@ -238,9 +288,64 @@ function resolveChannelMetaMap(
   return Object.fromEntries(snapshot.channelMeta.map((entry) => [entry.id, entry]));
 }
 
-function resolveChannelLabel(snapshot: ChannelsStatusSnapshot | null, key: string): string {
+function resolveChannelLabel(
+  snapshot: ChannelsStatusSnapshot | null,
+  key: string,
+  schema?: unknown,
+): string {
   const meta = resolveChannelMetaMap(snapshot)[key];
-  return meta?.label ?? snapshot?.channelLabels?.[key] ?? key;
+  return (
+    meta?.label ??
+    snapshot?.channelLabels?.[key] ??
+    resolveSchemaChannelLabel(schema, key) ??
+    CHANNEL_LABEL_FALLBACKS[key] ??
+    key
+  );
+}
+
+function compareChannelIds(left: string, right: string): number {
+  const leftIndex = PREFERRED_CHANNEL_ORDER.indexOf(
+    left as (typeof PREFERRED_CHANNEL_ORDER)[number],
+  );
+  const rightIndex = PREFERRED_CHANNEL_ORDER.indexOf(
+    right as (typeof PREFERRED_CHANNEL_ORDER)[number],
+  );
+  if (leftIndex !== -1 || rightIndex !== -1) {
+    if (leftIndex === -1) {
+      return 1;
+    }
+    if (rightIndex === -1) {
+      return -1;
+    }
+    return leftIndex - rightIndex;
+  }
+  return left.localeCompare(right);
+}
+
+function asSchemaNode(value: unknown): JsonSchemaNode | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as JsonSchemaNode;
+}
+
+function resolveSchemaChannelIds(schema: unknown): string[] {
+  const root = asSchemaNode(schema);
+  const channels = root?.properties?.channels;
+  const channelSchema = asSchemaNode(channels);
+  const properties = channelSchema?.properties;
+  if (!properties) {
+    return [];
+  }
+  return Object.keys(properties);
+}
+
+function resolveSchemaChannelLabel(schema: unknown, key: string): string | null {
+  const root = asSchemaNode(schema);
+  const channels = asSchemaNode(root?.properties?.channels);
+  const node = asSchemaNode(channels?.properties?.[key]);
+  const title = typeof node?.title === "string" ? node.title.trim() : "";
+  return title || null;
 }
 
 const RECENT_ACTIVITY_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes

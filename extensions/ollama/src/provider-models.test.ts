@@ -14,8 +14,13 @@ describe("ollama provider models", () => {
     vi.unstubAllGlobals();
   });
 
-  it("strips /v1 when resolving the Ollama API base", () => {
+  it("strips copied Ollama endpoint suffixes when resolving the API base", () => {
     expect(resolveOllamaApiBase("http://127.0.0.1:11434/v1")).toBe("http://127.0.0.1:11434");
+    expect(resolveOllamaApiBase("http://127.0.0.1:11434/api/tags")).toBe("http://127.0.0.1:11434");
+    expect(resolveOllamaApiBase("http://127.0.0.1:11434/v1/models")).toBe("http://127.0.0.1:11434");
+    expect(resolveOllamaApiBase("http://proxy.local/ollama/api/show")).toBe(
+      "http://proxy.local/ollama",
+    );
     expect(resolveOllamaApiBase("http://127.0.0.1:11434///")).toBe("http://127.0.0.1:11434");
   });
 

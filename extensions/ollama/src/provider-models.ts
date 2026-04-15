@@ -31,6 +31,20 @@ export type OllamaModelWithContext = OllamaTagModel & {
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const MAX_OLLAMA_SHOW_CACHE_ENTRIES = 256;
 const ollamaModelShowInfoCache = new Map<string, Promise<OllamaModelShowInfo>>();
+const OLLAMA_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
+const OLLAMA_TRAILING_PATH_SUFFIXES = [
+  "/api/tags",
+  "/api/show",
+  "/api/chat",
+  "/api/generate",
+  "/api/pull",
+  "/api/embed",
+  "/api/embeddings",
+  "/v1/chat/completions",
+  "/v1/embeddings",
+  "/v1/models",
+  "/v1",
+] as const;
 
 export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
   const trimmed = baseUrl.trim();
@@ -42,9 +56,12 @@ export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return undefined;
     }
+    if (OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname)) {
+      return undefined;
+    }
     return {
-      allowedHostnames: [parsed.hostname],
       hostnameAllowlist: [parsed.hostname],
+      allowPrivateNetwork: true,
     };
   } catch {
     return undefined;
@@ -56,7 +73,13 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
     return OLLAMA_DEFAULT_BASE_URL;
   }
   const trimmed = configuredBaseUrl.replace(/\/+$/, "");
-  return trimmed.replace(/\/v1$/i, "");
+  const normalized = trimmed.toLowerCase();
+  for (const suffix of OLLAMA_TRAILING_PATH_SUFFIXES) {
+    if (normalized.endsWith(suffix)) {
+      return trimmed.slice(0, -suffix.length);
+    }
+  }
+  return trimmed;
 }
 
 export type OllamaModelShowInfo = {

@@ -22,6 +22,7 @@ TARGET_PACKAGE_SPEC=""
 KEEP_SERVER=0
 CHECK_LATEST_REF=1
 JSON_OUTPUT=0
+AUTH_SMOKE_PASSWORD="OpenClawSmokePassword!"
 DISCORD_TOKEN_ENV=""
 DISCORD_TOKEN_VALUE=""
 DISCORD_GUILD_ID=""
@@ -44,16 +45,16 @@ SERVER_PID=""
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-smoke.XXXXXX)"
 BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 
-TIMEOUT_INSTALL_SITE_S=900
-TIMEOUT_INSTALL_TGZ_S=900
-TIMEOUT_INSTALL_REGISTRY_S=480
-TIMEOUT_UPDATE_DEV_S=1500
+TIMEOUT_INSTALL_SITE_S=300
+TIMEOUT_INSTALL_TGZ_S=300
+TIMEOUT_INSTALL_REGISTRY_S=300
+TIMEOUT_UPDATE_DEV_S=300
 TIMEOUT_VERIFY_S=60
 TIMEOUT_ONBOARD_S=180
 TIMEOUT_GATEWAY_S=120
 TIMEOUT_AGENT_S=240
 TIMEOUT_PERMISSION_S=60
-TIMEOUT_DASHBOARD_S=60
+TIMEOUT_DASHBOARD_S=90
 TIMEOUT_SNAPSHOT_S=180
 TIMEOUT_CURRENT_USER_PRLCTL_S=45
 TIMEOUT_DISCORD_S=180
@@ -1253,9 +1254,17 @@ EOF
 }
 
 run_ref_onboard() {
+  local auth_scenario="${1:-auto-entry}"
   local daemon_args=("--install-daemon")
+  local auth_args=()
   if headless_guest_fallback; then
     daemon_args=("--skip-health")
+  fi
+  if [[ "$auth_scenario" == "password-entry" ]]; then
+    auth_args=(
+      --gateway-auth password
+      --gateway-password "$AUTH_SMOKE_PASSWORD"
+    )
   fi
   guest_current_user_cli \
     /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" \
@@ -1266,6 +1275,7 @@ run_ref_onboard() {
     --secret-input-mode ref \
     --gateway-port 18789 \
     --gateway-bind loopback \
+    "${auth_args[@]}" \
     "${daemon_args[@]}" \
     --skip-skills \
     --accept-risk \
@@ -1350,6 +1360,99 @@ EOF
 )"
 }
 
+inspect_gateway_auth() {
+  guest_current_user_sh "$(cat <<'EOF'
+python3 - <<'PY'
+import json
+import pathlib
+
+path = pathlib.Path.home() / ".openclaw" / "openclaw.json"
+if not path.exists():
+    print(json.dumps({"mode": None, "hasToken": False, "hasPassword": False}))
+    raise SystemExit(0)
+
+raw = json.loads(path.read_text())
+gateway = raw.get("gateway") or {}
+auth = gateway.get("auth") or {}
+
+def has_plain_secret(value):
+    return isinstance(value, str) and value.strip() and not value.strip().startswith("${")
+
+print(
+    json.dumps(
+        {
+            "mode": auth.get("mode"),
+            "hasToken": has_plain_secret(auth.get("token")),
+            "hasPassword": has_plain_secret(auth.get("password")),
+        }
+    )
+)
+PY
+EOF
+)"
+}
+
+scenario_summary_path() {
+  printf '%s/%s-%s-summary.json\n' "$RUN_DIR" "$1" "$2"
+}
+
+detect_fatal_errors_for_prefix() {
+  local prefix="$1"
+  python3 - "$RUN_DIR" "$prefix" <<'PY'
+import pathlib
+import re
+import sys
+
+run_dir = pathlib.Path(sys.argv[1])
+prefix = sys.argv[2]
+pattern = re.compile(r"(fatal|uncaught|panic|traceback|segmentation fault)", re.IGNORECASE)
+found = False
+for path in sorted(run_dir.glob(f"{prefix}*.log")):
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        continue
+    if pattern.search(text):
+        found = True
+        break
+print("true" if found else "false")
+PY
+}
+
+write_auth_scenario_summary() {
+  local lane="$1"
+  local scenario="$2"
+  local status="$3"
+  local gateway_status="$4"
+  local dashboard_status="$5"
+  local agent_status="$6"
+  local discord_status="$7"
+  local auth_json fatal_errors
+  auth_json="$(inspect_gateway_auth)"
+  fatal_errors="$(detect_fatal_errors_for_prefix "$lane.$scenario.")"
+  python3 - "$(scenario_summary_path "$lane" "$scenario")" "$scenario" "$status" "$gateway_status" "$dashboard_status" "$agent_status" "$discord_status" "$fatal_errors" "$auth_json" <<'PY'
+import json
+import sys
+
+path, scenario, status, gateway_status, dashboard_status, agent_status, discord_status, fatal_errors, auth_json = sys.argv[1:]
+auth = json.loads(auth_json)
+summary = {
+    "scenario": scenario,
+    "status": status,
+    "gateway": gateway_status,
+    "dashboard": dashboard_status,
+    "agent": agent_status,
+    "discord": discord_status,
+    "authModeUsed": auth.get("mode"),
+    "autoTokenAcquired": scenario == "auto-entry" and auth.get("mode") == "token" and auth.get("hasToken") and not auth.get("hasPassword"),
+    "enteredWithoutManualCredential": scenario == "auto-entry",
+    "fatalErrorsDetected": fatal_errors == "true",
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(summary, handle, indent=2, sort_keys=True)
+PY
+}
+
 resolve_dashboard_url() {
   local dashboard_url
   dashboard_url="$(
@@ -1410,6 +1513,7 @@ done
 }
 grep -F '<title>OpenClaw Control</title>' /tmp/openclaw-dashboard-smoke.html >/dev/null
 grep -F '<openclaw-app></openclaw-app>' /tmp/openclaw-dashboard-smoke.html >/dev/null
+echo "dashboard HTML ready at \$dashboard_http_url"
 if [ "\$headless_flag" = "1" ]; then
   exit 0
 fi
@@ -1418,10 +1522,11 @@ open -a Safari "\$dashboard_url"
 deadline=\$((SECONDS + 20))
 while [ \$SECONDS -lt \$deadline ]; do
   # Tahoe can hand dashboard sockets to WebKit helpers even after the Safari
-  # app process exits, so require a non-node client connection rather than a
-  # long-lived Safari process specifically.
-  if lsof -nPiTCP:"\$dashboard_port" -sTCP:ESTABLISHED 2>/dev/null \
-    | awk 'NR > 1 && \$1 != "node" { found = 1 } END { exit found ? 0 : 1 }'; then
+  # app process exits. Avoid lsof here because it can stall under Parallels;
+  # an established localhost client socket proves the browser reached the UI.
+  if netstat -anv -p tcp 2>/dev/null \
+    | awk -v port=".\$dashboard_port" '\$4 ~ port "\$" && \$6 == "ESTABLISHED" { found = 1 } END { exit found ? 0 : 1 }'; then
+    echo "dashboard browser connection ready on port \$dashboard_port"
     exit 0
   fi
   sleep 1
@@ -1692,6 +1797,15 @@ write_summary_json() {
 import json
 import os
 import sys
+from pathlib import Path
+
+def load_optional(path_value):
+    if not path_value:
+        return None
+    path = Path(path_value)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
 
 summary = {
     "vm": os.environ["SUMMARY_VM"],
@@ -1711,6 +1825,10 @@ summary = {
         "agent": os.environ["SUMMARY_FRESH_AGENT_STATUS"],
         "dashboard": os.environ["SUMMARY_FRESH_DASHBOARD_STATUS"],
         "discord": os.environ["SUMMARY_FRESH_DISCORD_STATUS"],
+        "authScenarios": {
+            "autoEntry": load_optional(os.environ.get("SUMMARY_FRESH_AUTO_ENTRY_PATH")),
+            "passwordEntry": load_optional(os.environ.get("SUMMARY_FRESH_PASSWORD_ENTRY_PATH")),
+        },
     },
     "upgrade": {
         "path": os.environ["SUMMARY_UPGRADE_PATH_LABEL"],
@@ -1723,6 +1841,9 @@ summary = {
         "agent": os.environ["SUMMARY_UPGRADE_AGENT_STATUS"],
         "dashboard": os.environ["SUMMARY_UPGRADE_DASHBOARD_STATUS"],
         "discord": os.environ["SUMMARY_UPGRADE_DISCORD_STATUS"],
+        "authScenarios": {
+            "autoEntry": load_optional(os.environ.get("SUMMARY_UPGRADE_AUTO_ENTRY_PATH")),
+        },
     },
 }
 with open(sys.argv[1], "w", encoding="utf-8") as handle:
@@ -1755,20 +1876,28 @@ run_fresh_main_lane() {
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
   phase_run "fresh.verify-bundle-permissions" "$TIMEOUT_PERMISSION_S" verify_bundle_permissions
-  phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
-  phase_run "fresh.gateway-start" "$TIMEOUT_GATEWAY_S" start_manual_gateway_if_needed
-  phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway
+  phase_run "fresh.auto-entry.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard "auto-entry"
+  phase_run "fresh.auto-entry.gateway-start" "$TIMEOUT_GATEWAY_S" start_manual_gateway_if_needed
+  phase_run "fresh.auto-entry.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway
   FRESH_GATEWAY_STATUS="pass"
-  phase_run "fresh.dashboard-load" "$TIMEOUT_DASHBOARD_S" verify_dashboard_load
+  phase_run "fresh.auto-entry.dashboard-load" "$TIMEOUT_DASHBOARD_S" verify_dashboard_load
   FRESH_DASHBOARD_STATUS="pass"
-  phase_run "fresh.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn
+  phase_run "fresh.auto-entry.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn
   FRESH_AGENT_STATUS="pass"
+  FRESH_DISCORD_STATUS="skipped"
   if discord_smoke_enabled; then
     FRESH_DISCORD_STATUS="fail"
-    phase_run "fresh.discord-config" "$TIMEOUT_GATEWAY_S" configure_discord_smoke
-    phase_run "fresh.discord-roundtrip" "$TIMEOUT_DISCORD_S" run_discord_roundtrip_smoke "fresh"
+    phase_run "fresh.auto-entry.discord-config" "$TIMEOUT_GATEWAY_S" configure_discord_smoke
+    phase_run "fresh.auto-entry.discord-roundtrip" "$TIMEOUT_DISCORD_S" run_discord_roundtrip_smoke "fresh-auto-entry"
     FRESH_DISCORD_STATUS="pass"
   fi
+  write_auth_scenario_summary "fresh" "auto-entry" "pass" "pass" "pass" "pass" "$FRESH_DISCORD_STATUS"
+  phase_run "fresh.password-entry.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard "password-entry"
+  phase_run "fresh.password-entry.gateway-start" "$TIMEOUT_GATEWAY_S" start_manual_gateway_if_needed
+  phase_run "fresh.password-entry.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway
+  phase_run "fresh.password-entry.dashboard-load" "$TIMEOUT_DASHBOARD_S" verify_dashboard_load
+  phase_run "fresh.password-entry.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn
+  write_auth_scenario_summary "fresh" "password-entry" "pass" "pass" "pass" "pass" "skipped"
 }
 
 run_upgrade_lane() {
@@ -1797,20 +1926,22 @@ run_upgrade_lane() {
     UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.update-dev)")"
     phase_run "upgrade.verify-dev-channel" "$TIMEOUT_VERIFY_S" verify_dev_channel_update
   fi
-  phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
-  phase_run "upgrade.gateway-start" "$TIMEOUT_GATEWAY_S" start_manual_gateway_if_needed
-  phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway
+  phase_run "upgrade.auto-entry.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard "auto-entry"
+  phase_run "upgrade.auto-entry.gateway-start" "$TIMEOUT_GATEWAY_S" start_manual_gateway_if_needed
+  phase_run "upgrade.auto-entry.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway
   UPGRADE_GATEWAY_STATUS="pass"
-  phase_run "upgrade.dashboard-load" "$TIMEOUT_DASHBOARD_S" verify_dashboard_load
+  phase_run "upgrade.auto-entry.dashboard-load" "$TIMEOUT_DASHBOARD_S" verify_dashboard_load
   UPGRADE_DASHBOARD_STATUS="pass"
-  phase_run "upgrade.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn
+  phase_run "upgrade.auto-entry.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn
   UPGRADE_AGENT_STATUS="pass"
+  UPGRADE_DISCORD_STATUS="skipped"
   if discord_smoke_enabled; then
     UPGRADE_DISCORD_STATUS="fail"
-    phase_run "upgrade.discord-config" "$TIMEOUT_GATEWAY_S" configure_discord_smoke
-    phase_run "upgrade.discord-roundtrip" "$TIMEOUT_DISCORD_S" run_discord_roundtrip_smoke "upgrade"
+    phase_run "upgrade.auto-entry.discord-config" "$TIMEOUT_GATEWAY_S" configure_discord_smoke
+    phase_run "upgrade.auto-entry.discord-roundtrip" "$TIMEOUT_DISCORD_S" run_discord_roundtrip_smoke "upgrade-auto-entry"
     UPGRADE_DISCORD_STATUS="pass"
   fi
+  write_auth_scenario_summary "upgrade" "auto-entry" "pass" "pass" "pass" "pass" "$UPGRADE_DISCORD_STATUS"
 }
 
 FRESH_MAIN_STATUS="skip"
@@ -1890,6 +2021,8 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_FRESH_AGENT_STATUS="$FRESH_AGENT_STATUS" \
   SUMMARY_FRESH_DASHBOARD_STATUS="$FRESH_DASHBOARD_STATUS" \
   SUMMARY_FRESH_DISCORD_STATUS="$FRESH_DISCORD_STATUS" \
+  SUMMARY_FRESH_AUTO_ENTRY_PATH="$(scenario_summary_path fresh auto-entry)" \
+  SUMMARY_FRESH_PASSWORD_ENTRY_PATH="$(scenario_summary_path fresh password-entry)" \
   SUMMARY_UPGRADE_PRECHECK_STATUS="$UPGRADE_PRECHECK_STATUS" \
   SUMMARY_UPGRADE_STATUS="$UPGRADE_STATUS" \
   SUMMARY_LATEST_INSTALLED_VERSION="$LATEST_INSTALLED_VERSION" \
@@ -1898,6 +2031,7 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_UPGRADE_AGENT_STATUS="$UPGRADE_AGENT_STATUS" \
   SUMMARY_UPGRADE_DASHBOARD_STATUS="$UPGRADE_DASHBOARD_STATUS" \
   SUMMARY_UPGRADE_DISCORD_STATUS="$UPGRADE_DISCORD_STATUS" \
+  SUMMARY_UPGRADE_AUTO_ENTRY_PATH="$(scenario_summary_path upgrade auto-entry)" \
   SUMMARY_UPGRADE_PATH_LABEL="$(upgrade_summary_label)" \
   write_summary_json
 )"

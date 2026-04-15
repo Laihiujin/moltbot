@@ -527,6 +527,53 @@ export function buildConfigSchema(params?: {
   return merged;
 }
 
+function filterUiHintsBySections(uiHints: ConfigUiHints, sections: ReadonlySet<string>): ConfigUiHints {
+  const next: ConfigUiHints = {};
+  for (const [key, hint] of Object.entries(uiHints)) {
+    const [topLevel] = key.split(".");
+    if (topLevel && sections.has(topLevel)) {
+      next[key] = hint;
+    }
+  }
+  return next;
+}
+
+export function scopeConfigSchemaResponse(
+  response: ConfigSchemaResponse,
+  sections: readonly string[],
+): ConfigSchemaResponse {
+  const normalizedSections = Array.from(
+    new Set(sections.map((section) => section.trim()).filter(Boolean)),
+  );
+  if (normalizedSections.length === 0) {
+    return response;
+  }
+
+  const root = asJsonSchemaObject(response.schema);
+  if (!root || !root.properties) {
+    return response;
+  }
+
+  const sectionSet = new Set(normalizedSections);
+  const nextProperties: Record<string, JsonSchemaObject> = {};
+  for (const [key, value] of Object.entries(root.properties)) {
+    if (sectionSet.has(key)) {
+      nextProperties[key] = value;
+    }
+  }
+
+  const nextRequired = (root.required ?? []).filter((key) => sectionSet.has(key));
+  return {
+    ...response,
+    schema: {
+      ...root,
+      properties: nextProperties,
+      ...(nextRequired.length > 0 ? { required: nextRequired } : {}),
+    },
+    uiHints: filterUiHintsBySections(response.uiHints, sectionSet),
+  };
+}
+
 function normalizeLookupPath(path: string): string {
   return path
     .trim()

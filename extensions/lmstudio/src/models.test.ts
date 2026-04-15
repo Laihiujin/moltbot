@@ -42,6 +42,18 @@ describe("lmstudio-models", () => {
     expect(resolveLmstudioInferenceBase("http://localhost:1234/api/v1")).toBe(
       "http://localhost:1234/v1",
     );
+    expect(resolveLmstudioServerBase("http://localhost:7017/api/v1/models")).toBe(
+      "http://localhost:7017",
+    );
+    expect(resolveLmstudioInferenceBase("http://localhost:7017/api/v1/models")).toBe(
+      "http://localhost:7017/v1",
+    );
+    expect(resolveLmstudioServerBase("http://proxy.local/lmstudio/api/v1/models/load")).toBe(
+      "http://proxy.local/lmstudio",
+    );
+    expect(resolveLmstudioInferenceBase("http://proxy.local/lmstudio/v1/chat/completions")).toBe(
+      "http://proxy.local/lmstudio/v1",
+    );
     expect(resolveLmstudioServerBase("localhost:1234/api/v1")).toBe("http://localhost:1234");
     expect(resolveLmstudioInferenceBase("localhost:1234/api/v1")).toBe("http://localhost:1234/v1");
   });

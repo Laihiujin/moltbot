@@ -213,6 +213,22 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
+  it("surfaces a provider mismatch error for empty openai-completions replies on custom providers", () => {
+    const payloads = buildPayloads({
+      provider: "anyrouter",
+      lastAssistant: makeAssistant({
+        api: "openai-completions",
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [],
+      }),
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("The model returned an empty reply");
+  });
+
   it("adds tool error fallback when the assistant only invoked tools and verbose mode is on", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({

@@ -227,6 +227,7 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
     cronEnabled: null,
     cronNext: null,
     lastChannelsRefresh: null,
+    modelAuthStatus: null,
     usageResult: null,
     sessionsResult: null,
     skillsReport: null,
@@ -244,6 +245,7 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
     onToggleGatewayPasswordVisibility: () => undefined,
     onConnect: () => undefined,
     onRefresh: () => undefined,
+    onOpenGatewayAuthSettings: () => undefined,
     onNavigate: () => undefined,
     onRefreshLogs: () => undefined,
     ...overrides,
@@ -490,7 +492,7 @@ describe("chat view", () => {
     );
     expect(welcomeImage).toBeNull();
     expect(logoImage).not.toBeNull();
-    expect(logoImage?.getAttribute("src")).toBe("favicon.svg");
+    expect(logoImage?.getAttribute("src")).toMatch(/^data:image\/svg\+xml,/);
   });
 
   it("keeps the welcome logo fallback under the mounted base path", () => {
@@ -571,6 +573,57 @@ describe("chat view", () => {
     expect(select?.selectedOptions[0]?.textContent?.trim()).toBe("简体中文 (简体中文)");
 
     await i18n.setLocale("en");
+  });
+
+  it("hides the overview password input when token auth is active", () => {
+    const container = document.createElement("div");
+    render(
+      renderOverview(
+        createOverviewProps({
+          connected: true,
+          hello: {
+            type: "hello-ok",
+            protocol: 3,
+            snapshot: {
+              authMode: "token",
+            },
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).not.toContain("Password");
+    expect(container.textContent).not.toContain("密码");
+    expect(container.querySelector('input[placeholder="system or shared password"]')).toBeNull();
+  });
+
+  it("renders a shortcut to infrastructure gateway auth settings", () => {
+    const container = document.createElement("div");
+    const onOpenGatewayAuthSettings = vi.fn();
+    render(
+      renderOverview(
+        createOverviewProps({
+          connected: true,
+          hello: {
+            type: "hello-ok",
+            protocol: 3,
+            snapshot: {
+              authMode: "token",
+            },
+          },
+          onOpenGatewayAuthSettings,
+        }),
+      ),
+      container,
+    );
+
+    const button = Array.from(container.querySelectorAll("button")).find((candidate) =>
+      candidate.textContent?.includes("Infrastructure"),
+    );
+    expect(button).not.toBeUndefined();
+    button?.click();
+    expect(onOpenGatewayAuthSettings).toHaveBeenCalledTimes(1);
   });
 
   it("renders compacting indicator as a badge", () => {

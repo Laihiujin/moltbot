@@ -67,6 +67,7 @@ import type {
   WikiImportInsights,
   WikiMemoryPalace,
 } from "./controllers/dreaming.ts";
+import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type {
@@ -92,6 +93,7 @@ import type {
   HealthSummary,
   LogEntry,
   LogLevel,
+  ModelAuthStatusResult,
   ModelCatalogEntry,
   PresenceEntry,
   ChannelsStatusSnapshot,
@@ -141,6 +143,7 @@ export class OpenClawApp extends LitElement {
     }
   }
   @state() password = "";
+  @state() gatewayAuthMode: "none" | "token" | "password" | "trusted-proxy" | null = null;
   @state() loginShowGatewayToken = false;
   @state() loginShowGatewayPassword = false;
   @state() tab: Tab = "chat";
@@ -153,10 +156,13 @@ export class OpenClawApp extends LitElement {
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
   @state() lastErrorCode: string | null = null;
+  @state() gatewayBootstrapBusy = false;
   @state() eventLog: EventLogEntry[] = [];
   private eventLogBuffer: EventLogEntry[] = [];
   private toolStreamSyncTimer: number | null = null;
   private sidebarCloseTimer: number | null = null;
+  desktopConnectRetryTimer: number | null = null;
+  desktopConnectRetryAttempts = 0;
 
   @state() assistantName = bootAssistantIdentity.name;
   @state() assistantAvatar = bootAssistantIdentity.avatar;
@@ -279,6 +285,7 @@ export class OpenClawApp extends LitElement {
   @state() channelsSnapshot: ChannelsStatusSnapshot | null = null;
   @state() channelsError: string | null = null;
   @state() channelsLastSuccess: number | null = null;
+  @state() expandedChannelIds: Set<string> = new Set();
   @state() whatsappLoginMessage: string | null = null;
   @state() whatsappLoginQrDataUrl: string | null = null;
   @state() whatsappLoginConnected: boolean | null = null;
@@ -466,6 +473,10 @@ export class OpenClawApp extends LitElement {
   @state() healthResult: HealthSummary | null = null;
   @state() healthError: string | null = null;
 
+  @state() modelAuthStatusLoading = false;
+  @state() modelAuthStatusResult: ModelAuthStatusResult | null = null;
+  @state() modelAuthStatusError: string | null = null;
+
   @state() debugLoading = false;
   @state() debugStatus: StatusSummary | null = null;
   @state() debugHealth: HealthSummary | null = null;
@@ -582,6 +593,12 @@ export class OpenClawApp extends LitElement {
     connectGatewayInternal(this as unknown as Parameters<typeof connectGatewayInternal>[0]);
   }
 
+  async bootstrapLocalGatewayAccess() {
+    await loadControlUiBootstrapConfig(
+      this as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
+    );
+  }
+
   handleChatScroll(event: Event) {
     handleChatScrollInternal(
       this as unknown as Parameters<typeof handleChatScrollInternal>[0],
@@ -657,8 +674,8 @@ export class OpenClawApp extends LitElement {
     return [active, ...rest];
   }
 
-  async loadOverview() {
-    await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0]);
+  async loadOverview(opts?: { refresh?: boolean }) {
+    await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0], opts);
   }
 
   async loadCron() {
@@ -705,6 +722,16 @@ export class OpenClawApp extends LitElement {
 
   async handleChannelConfigReload() {
     await handleChannelConfigReloadInternal(this);
+  }
+
+  handleToggleChannelExpanded(channelId: string) {
+    const next = new Set(this.expandedChannelIds);
+    if (next.has(channelId)) {
+      next.delete(channelId);
+    } else {
+      next.add(channelId);
+    }
+    this.expandedChannelIds = next;
   }
 
   handleNostrProfileEdit(accountId: string, profile: NostrProfile | null) {

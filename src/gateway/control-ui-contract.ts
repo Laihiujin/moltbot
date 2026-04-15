@@ -6,6 +6,9 @@ export type ControlUiBootstrapConfig = {
   basePath: string;
   assistantName: string;
   assistantAvatar: string;
+  authMode?: "none" | "token" | "password" | "trusted-proxy";
+  token?: string;
+  password?: string;
   assistantAgentId: string;
   serverVersion?: string;
   localMediaPreviewRoots?: string[];

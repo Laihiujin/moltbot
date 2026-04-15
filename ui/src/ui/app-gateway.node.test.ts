@@ -121,6 +121,9 @@ function createHost(): TestGatewayHost {
     password: "",
     clientInstanceId: "instance-test",
     client: null,
+    gatewayBootstrapBusy: false,
+    desktopConnectRetryTimer: null,
+    desktopConnectRetryAttempts: 0,
     connected: false,
     hello: null,
     lastError: null,
@@ -192,6 +195,7 @@ describe("connectGateway", () => {
   beforeEach(() => {
     gatewayClientInstances.length = 0;
     loadChatHistoryMock.mockClear();
+    vi.useRealTimers();
   });
 
   it("ignores stale client onGap callbacks after reconnect", () => {
@@ -283,6 +287,102 @@ describe("connectGateway", () => {
     secondClient.emitClose({ code: 1005 });
     expect(host.lastError).toBe("disconnected (1005): no reason");
     expect(host.lastErrorCode).toBeNull();
+  });
+
+  it("retries local desktop gateway disconnects before surfacing the login gate", () => {
+    vi.useFakeTimers();
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", {
+      value: new URL("http://tauri.localhost/"),
+      configurable: true,
+    });
+    try {
+      const host = createHost();
+
+      connectGateway(host);
+      const client = gatewayClientInstances[0];
+      expect(client).toBeDefined();
+
+      client.emitClose({ code: 1006 });
+
+      expect(host.lastError).toBeNull();
+      expect(host.gatewayBootstrapBusy).toBe(true);
+      expect(host.desktopConnectRetryAttempts).toBe(1);
+      expect(gatewayClientInstances).toHaveLength(1);
+
+      vi.advanceTimersByTime(500);
+
+      expect(gatewayClientInstances).toHaveLength(2);
+      expect(host.gatewayBootstrapBusy).toBe(true);
+    } finally {
+      Object.defineProperty(window, "location", {
+        value: originalLocation,
+        configurable: true,
+      });
+    }
+  });
+
+  it("bootstraps the local desktop gateway before retrying a failed connection", async () => {
+    vi.useFakeTimers();
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", {
+      value: new URL("http://tauri.localhost/"),
+      configurable: true,
+    });
+    try {
+      const host = createHost();
+      const bootstrapLocalGatewayAccess = vi.fn(async () => undefined);
+      host.bootstrapLocalGatewayAccess = bootstrapLocalGatewayAccess;
+
+      connectGateway(host);
+      const client = gatewayClientInstances[0];
+      expect(client).toBeDefined();
+
+      client.emitClose({ code: 1006 });
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(bootstrapLocalGatewayAccess).toHaveBeenCalledTimes(1);
+      expect(gatewayClientInstances).toHaveLength(2);
+    } finally {
+      Object.defineProperty(window, "location", {
+        value: originalLocation,
+        configurable: true,
+      });
+    }
+  });
+
+  it("keeps retrying local desktop gateway reconnects beyond one minute", async () => {
+    vi.useFakeTimers();
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", {
+      value: new URL("http://tauri.localhost/"),
+      configurable: true,
+    });
+    try {
+      const host = createHost();
+      const bootstrapLocalGatewayAccess = vi.fn(async () => undefined);
+      host.bootstrapLocalGatewayAccess = bootstrapLocalGatewayAccess;
+
+      connectGateway(host);
+      let client = gatewayClientInstances[0];
+      expect(client).toBeDefined();
+
+      for (let attempt = 0; attempt < 61; attempt += 1) {
+        client.emitClose({ code: 1006 });
+        await vi.advanceTimersByTimeAsync(1600);
+        client = gatewayClientInstances[gatewayClientInstances.length - 1]!;
+      }
+
+      expect(host.desktopConnectRetryAttempts).toBe(61);
+      expect(host.gatewayBootstrapBusy).toBe(true);
+      expect(bootstrapLocalGatewayAccess).toHaveBeenCalledTimes(61);
+      expect(gatewayClientInstances).toHaveLength(62);
+    } finally {
+      Object.defineProperty(window, "location", {
+        value: originalLocation,
+        configurable: true,
+      });
+    }
   });
 
   it("preserves pending approval requests across reconnect", () => {
@@ -619,6 +719,38 @@ describe("connectGateway", () => {
       expect(host.chatStream).toBe("stream in progress");
       expect(host.toolStreamOrder).toHaveLength(1);
       expect(host.lastError).toBeNull();
+    },
+  );
+
+  it.each(["aborted", "error"] as const)(
+    "replays deferred session.message reloads after %s clears the active run",
+    (terminalState) => {
+      const { host, client } = connectHostGateway();
+      host.chatRunId = "main-run-3";
+      loadChatHistoryMock.mockClear();
+
+      client.emitEvent({
+        event: "session.message",
+        payload: {
+          sessionKey: "main",
+        },
+      });
+
+      expect(loadChatHistoryMock).not.toHaveBeenCalled();
+
+      client.emitEvent({
+        event: "chat",
+        payload: {
+          runId: "main-run-3",
+          sessionKey: "main",
+          state: terminalState,
+          errorMessage: terminalState === "error" ? "chat failed" : undefined,
+        },
+      });
+
+      expect(host.chatRunId).toBeNull();
+      expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+      expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
     },
   );
 

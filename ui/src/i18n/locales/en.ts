@@ -226,7 +226,8 @@ export const en: TranslationMap = {
       cronText: "Use isolated sessions for recurring runs.",
     },
     auth: {
-      required: "This gateway requires auth. Add a token or password, then click Connect.",
+      required:
+        "This gateway requires auth. Local installs usually fill this automatically; otherwise add a token or password, then click Connect.",
       failed:
         "Auth failed. Re-copy a tokenized URL with {command}, or update the token, then click Connect.",
     },
@@ -252,6 +253,17 @@ export const en: TranslationMap = {
       cost: "Cost",
       skills: "Skills",
       recentSessions: "Recent Sessions",
+      modelAuth: "Model Auth",
+      modelAuthOk: "{count} ok",
+      modelAuthExpired: "{count} expired",
+      modelAuthExpiring: "{count} expiring",
+      modelAuthProviders: "{count} providers",
+      modelAuthUsageLeft: "{pct}% left",
+      modelAuthExpiresIn: "expires {when}",
+      modelAuthAttentionExpiredTitle: "Model auth expired",
+      modelAuthAttentionExpiringTitle: "Model auth expiring soon",
+      modelAuthAttentionExpiredDesc: "{providers} — re-authenticate with openclaw models auth",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "Attention",

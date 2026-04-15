@@ -11,6 +11,7 @@ import type {
   AttentionItem,
   CronJob,
   CronStatus,
+  ModelAuthStatusResult,
   SessionsListResult,
   SessionsUsageResult,
   SkillStatusReport,
@@ -21,6 +22,7 @@ import { renderOverviewCards } from "./overview-cards.ts";
 import { renderOverviewEventLog } from "./overview-event-log.ts";
 import {
   resolveAuthHintKind,
+  shouldShowGatewayPasswordInput,
   shouldShowInsecureContextHint,
   shouldShowPairingHint,
 } from "./overview-hints.ts";
@@ -31,6 +33,7 @@ export type OverviewProps = {
   hello: GatewayHelloOk | null;
   settings: UiSettings;
   password: string;
+  gatewayAuthMode: "none" | "token" | "password" | "trusted-proxy" | null;
   lastError: string | null;
   lastErrorCode: string | null;
   presenceCount: number;
@@ -40,6 +43,7 @@ export type OverviewProps = {
   lastChannelsRefresh: number | null;
   warnQueryToken: boolean;
   // New dashboard data
+  modelAuthStatus: ModelAuthStatusResult | null;
   usageResult: SessionsUsageResult | null;
   sessionsResult: SessionsListResult | null;
   skillsReport: SkillStatusReport | null;
@@ -57,6 +61,7 @@ export type OverviewProps = {
   onToggleGatewayPasswordVisibility: () => void;
   onConnect: () => void;
   onRefresh: () => void;
+  onOpenGatewayAuthSettings: () => void;
   onNavigate: (tab: string) => void;
   onRefreshLogs: () => void;
 };
@@ -74,7 +79,15 @@ export function renderOverview(props: OverviewProps) {
     ? `${(tickIntervalMs / 1000).toFixed(tickIntervalMs % 1000 === 0 ? 0 : 1)}s`
     : t("common.na");
   const authMode = snapshot?.authMode;
-  const isTrustedProxy = authMode === "trusted-proxy";
+  const effectiveAuthMode = authMode ?? props.gatewayAuthMode;
+  const isTrustedProxy = effectiveAuthMode === "trusted-proxy";
+  const showTokenInput = effectiveAuthMode !== "none" && effectiveAuthMode !== "password" && !isTrustedProxy;
+  const authModeLabel = effectiveAuthMode ?? "token";
+  const showPasswordInput = shouldShowGatewayPasswordInput({
+    authMode: effectiveAuthMode,
+    password: props.password,
+    lastErrorCode: props.lastErrorCode,
+  });
 
   const pairingHint = (() => {
     if (!shouldShowPairingHint(props.connected, props.lastError, props.lastErrorCode)) {
@@ -237,9 +250,8 @@ export function renderOverview(props: OverviewProps) {
               placeholder="ws://100.x.y.z:18789"
             />
           </label>
-          ${isTrustedProxy
-            ? ""
-            : html`
+          ${showTokenInput
+            ? html`
                 <label class="field">
                   <span>${t("overview.access.token")}</span>
                   <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
@@ -267,6 +279,10 @@ export function renderOverview(props: OverviewProps) {
                     </button>
                   </div>
                 </label>
+              `
+            : nothing}
+          ${showPasswordInput
+            ? html`
                 <label class="field">
                   <span>${t("overview.access.password")}</span>
                   <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
@@ -294,7 +310,8 @@ export function renderOverview(props: OverviewProps) {
                     </button>
                   </div>
                 </label>
-              `}
+              `
+            : nothing}
           <label class="field">
             <span>${t("overview.access.sessionKey")}</span>
             <input
@@ -333,6 +350,16 @@ export function renderOverview(props: OverviewProps) {
               : t("overview.access.connectHint")}</span
           >
         </div>
+        <div class="row" style="margin-top: 10px; align-items: center;">
+          <span class="muted">${t("common.mode")}: <span class="mono">${authModeLabel}</span></span>
+          ${isTrustedProxy || effectiveAuthMode === "none"
+            ? nothing
+            : html`
+                <button class="btn" @click=${() => props.onOpenGatewayAuthSettings()}>
+                  ${t("tabs.infrastructure")} → Gateway
+                </button>
+              `}
+        </div>
         ${!props.connected
           ? html`
               <div class="login-gate__help" style="margin-top: 16px;">
@@ -346,11 +373,15 @@ export function renderOverview(props: OverviewProps) {
                     ${t("overview.connection.step2")} ${renderConnectCommand("openclaw dashboard")}
                   </li>
                   <li>${t("overview.connection.step3")}</li>
-                  <li>
-                    ${t("overview.connection.step4")}<code
-                      >openclaw doctor --generate-gateway-token</code
-                    >
-                  </li>
+                  ${showTokenInput
+                    ? html`
+                        <li>
+                          ${t("overview.connection.step4")}<code
+                            >openclaw doctor --generate-gateway-token</code
+                          >
+                        </li>
+                      `
+                    : nothing}
                 </ol>
                 <div class="login-gate__docs">
                   ${t("overview.connection.docsHint")}
@@ -416,6 +447,7 @@ export function renderOverview(props: OverviewProps) {
       skillsReport: props.skillsReport,
       cronJobs: props.cronJobs,
       cronStatus: props.cronStatus,
+      modelAuthStatus: props.modelAuthStatus,
       presenceCount: props.presenceCount,
       onNavigate: props.onNavigate,
     })}

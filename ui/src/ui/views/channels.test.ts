@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+/* @vitest-environment jsdom */
+
+import { render } from "lit";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   channelEnabled,
   resolveChannelConfigured,
   resolveChannelDisplayState,
 } from "./channels.shared.ts";
+import { renderChannels } from "./channels.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
 function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
@@ -11,6 +15,7 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
     connected: true,
     loading: false,
     snapshot,
+    expandedChannelIds: new Set(),
     lastError: null,
     lastSuccessAt: null,
     whatsappMessage: null,
@@ -26,6 +31,7 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
     nostrProfileFormState: null,
     nostrProfileAccountId: null,
     onRefresh: () => {},
+    onToggleChannelExpanded: () => {},
     onWhatsAppStart: () => {},
     onWhatsAppWait: () => {},
     onWhatsAppLogout: () => {},
@@ -116,5 +122,114 @@ describe("channel display selectors", () => {
     expect(displayState.running).toBeNull();
     expect(displayState.connected).toBeNull();
     expect(channelEnabled("signal", props)).toBe(false);
+  });
+});
+
+describe("channel cards", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("renders channels collapsed by default", () => {
+    const props = createProps({
+      ts: Date.now(),
+      channelOrder: ["discord"],
+      channelLabels: { discord: "Discord" },
+      channels: { discord: { configured: true, running: true } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    const container = document.createElement("div");
+
+    render(renderChannels(props), container);
+
+    const card = container.querySelector(".channel-card");
+    expect(card?.classList.contains("channel-card--collapsed")).toBe(true);
+    expect(container.querySelector(".channel-card__body")).toBeNull();
+  });
+
+  it("toggles a single channel open without affecting others", () => {
+    let expanded = new Set<string>();
+    const container = document.createElement("div");
+    const baseProps = createProps({
+      ts: Date.now(),
+      channelOrder: ["discord", "whatsapp"],
+      channelLabels: { discord: "Discord", whatsapp: "WhatsApp" },
+      channels: {
+        discord: { configured: true, running: true },
+        whatsapp: { configured: false, running: false },
+      },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    const renderWithState = () =>
+      render(
+        renderChannels({
+          ...baseProps,
+          expandedChannelIds: expanded,
+          onToggleChannelExpanded: (channelId) => {
+            const next = new Set(expanded);
+            if (next.has(channelId)) {
+              next.delete(channelId);
+            } else {
+              next.add(channelId);
+            }
+            expanded = next;
+          },
+        }),
+        container,
+      );
+
+    renderWithState();
+
+    const headers = container.querySelectorAll<HTMLButtonElement>(".channel-card__header");
+    headers[0]?.click();
+    renderWithState();
+
+    const cards = container.querySelectorAll(".channel-card");
+    expect(cards[0]?.classList.contains("channel-card--collapsed")).toBe(false);
+    expect(cards[1]?.classList.contains("channel-card--collapsed")).toBe(true);
+    expect(cards[0]?.querySelector(".channel-card__body")).not.toBeNull();
+    expect(cards[1]?.querySelector(".channel-card__body")).toBeNull();
+  });
+
+  it("surfaces schema-defined channels even when the health snapshot only includes configured ones", () => {
+    const props = {
+      ...createProps({
+        ts: Date.now(),
+        channelOrder: ["feishu"],
+        channelLabels: { feishu: "Feishu" },
+        channels: {
+          feishu: { configured: true, running: true },
+        },
+        channelAccounts: {},
+        channelDefaultAccountId: {},
+      }),
+      configSchema: {
+        type: "object",
+        properties: {
+          channels: {
+            type: "object",
+            properties: {
+              feishu: { type: "object", title: "Feishu" },
+              qqbot: { type: "object", title: "QQ Bot" },
+              discord: { type: "object", title: "Discord" },
+              imessage: { type: "object", title: "iMessage" },
+              telegram: { type: "object", title: "Telegram" },
+              twitter: { type: "object", title: "Twitter" },
+            },
+          },
+        },
+      },
+    } satisfies ChannelsProps;
+    const container = document.createElement("div");
+
+    render(renderChannels(props), container);
+
+    expect(container.textContent).toContain("QQ Bot");
+    expect(container.textContent).toContain("Discord");
+    expect(container.textContent).toContain("iMessage");
+    expect(container.textContent).toContain("Telegram");
+    expect(container.textContent).toContain("Twitter");
   });
 });

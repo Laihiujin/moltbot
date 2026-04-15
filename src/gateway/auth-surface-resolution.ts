@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { trimToUndefined, type ExplicitGatewayAuth } from "./credentials.js";
@@ -41,6 +43,67 @@ function withDiagnostics<T extends object>(params: {
   return params.diagnostics.length > 0
     ? { ...params.result, diagnostics: params.diagnostics }
     : params.result;
+}
+
+function generateGatewayToken(): string {
+  return crypto.randomBytes(24).toString("hex");
+}
+
+async function persistAutoAcquiredGatewayToken(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<{ token?: string; failureReason?: string; autoTokenAcquired?: boolean }> {
+  const snapshot = await readConfigFileSnapshot();
+  if (snapshot.exists && !snapshot.valid) {
+    return {
+      failureReason: "Config is invalid. Run `openclaw doctor` before retrying gateway auth.",
+    };
+  }
+
+  const sourceConfig =
+    snapshot.valid && snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : params.config;
+  const auth = sourceConfig.gateway?.auth;
+  if (auth?.mode === "password" || trimToUndefined(params.env.OPENCLAW_GATEWAY_PASSWORD)) {
+    return {
+      failureReason: "Missing gateway auth password.",
+    };
+  }
+
+  const existingToken =
+    trimToUndefined(params.env.OPENCLAW_GATEWAY_TOKEN) ??
+    trimToUndefined(typeof auth?.token === "string" ? auth.token : undefined);
+  if (existingToken) {
+    return { token: existingToken };
+  }
+
+  const token = generateGatewayToken();
+  const nextConfig: OpenClawConfig = {
+    ...sourceConfig,
+    gateway: {
+      ...sourceConfig.gateway,
+      auth: {
+        ...sourceConfig.gateway?.auth,
+        mode: "token",
+        token,
+        password: undefined,
+      },
+    },
+  };
+  try {
+    await replaceConfigFile({
+      nextConfig,
+      ...(snapshot.hash ? { baseHash: snapshot.hash } : {}),
+    });
+    return {
+      token,
+      autoTokenAcquired: true,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      failureReason: `Failed to auto-configure a local gateway token: ${message}`,
+    };
+  }
 }
 
 export async function resolveGatewayProbeSurfaceAuth(params: {
@@ -150,6 +213,7 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
   token?: string;
   password?: string;
   failureReason?: string;
+  autoTokenAcquired?: boolean;
 }> {
   const env = params.env ?? process.env;
   const diagnostics: string[] = [];
@@ -207,7 +271,7 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
     params.config.secrets?.defaults,
   );
 
-  const resolveToken = async () => {
+  const resolveToken = async (opts?: { allowAutoCreate?: boolean }) => {
     const localToken = explicitToken
       ? { value: explicitToken }
       : await resolveGatewayCredential({
@@ -218,11 +282,23 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
           value: params.config.gateway?.auth?.token,
         });
     const token = explicitToken ?? localToken.value ?? envToken;
+    if (!token && !localToken.unresolvedRefReason && opts?.allowAutoCreate) {
+      const autoToken = await persistAutoAcquiredGatewayToken({
+        config: params.config,
+        env,
+      });
+      return {
+        token: autoToken.token,
+        failureReason: autoToken.failureReason,
+        autoTokenAcquired: autoToken.autoTokenAcquired,
+      };
+    }
     return {
       token,
       failureReason: token
         ? undefined
         : (localToken.unresolvedRefReason ?? "Missing gateway auth token."),
+      autoTokenAcquired: false,
     };
   };
 
@@ -256,11 +332,12 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
   }
 
   if (authMode === "token") {
-    const token = await resolveToken();
+    const token = await resolveToken({ allowAutoCreate: true });
     return {
       token: token.token,
       password: explicitPassword ?? envPassword,
       failureReason: token.failureReason,
+      autoTokenAcquired: token.autoTokenAcquired,
     };
   }
 
@@ -275,10 +352,11 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
     };
   }
 
-  const token = await resolveToken();
+  const token = await resolveToken({ allowAutoCreate: !hasConfiguredToken });
   return {
     token: token.token,
     password: explicitPassword ?? envPassword,
     failureReason: token.failureReason,
+    autoTokenAcquired: token.autoTokenAcquired,
   };
 }

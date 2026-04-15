@@ -259,13 +259,59 @@ function normalizeTags(raw: unknown): string[] {
   return tags;
 }
 
+function formatPathSegmentLabel(segment: string | number): string {
+  if (typeof segment === "number" && Number.isFinite(segment)) {
+    return `Item #${segment + 1}`;
+  }
+  return humanize(String(segment));
+}
+
+function isCompositeSchema(schema: JsonSchema): boolean {
+  const type = schemaType(schema);
+  if (type === "object" || type === "array") {
+    return true;
+  }
+  const variants = schema.anyOf ?? schema.oneOf ?? [];
+  return variants.some((variant) => isCompositeSchema(variant));
+}
+
+function summarizeStructuredValue(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  const priorityKeys = ["name", "id", "label", "model", "baseUrl", "provider", "url"];
+  for (const key of priorityKeys) {
+    const raw = candidate[key];
+    if (typeof raw === "string" && raw.trim()) {
+      return raw.trim();
+    }
+  }
+  return null;
+}
+
+function shouldObjectStartOpen(path: Array<string | number>): boolean {
+  if (path.length === 2 && path[0] === "models" && path[1] === "providers") {
+    return false;
+  }
+  if (
+    path.length === 3 &&
+    path[0] === "models" &&
+    path[1] === "providers" &&
+    typeof path[2] === "string"
+  ) {
+    return false;
+  }
+  return path.length <= 3;
+}
+
 function resolveFieldMeta(
   path: Array<string | number>,
   schema: JsonSchema,
   hints: ConfigUiHints,
 ): FieldMeta {
   const hint = hintForPath(path, hints);
-  const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
+  const label = hint?.label ?? schema.title ?? formatPathSegmentLabel(path.at(-1) ?? "");
   const help = hint?.help ?? schema.description;
   const schemaTags = normalizeTags(schema["x-tags"] ?? schema.tags);
   const hintTags = normalizeTags(hint?.tags);
@@ -1035,7 +1081,7 @@ function renderObject(params: {
 
   // Nested objects get collapsible treatment
   return html`
-    <details class="cfg-object" ?open=${path.length <= 2}>
+    <details class="cfg-object" ?open=${shouldObjectStartOpen(path)}>
       <summary class="cfg-object__header">
         <span class="cfg-object__title-wrap">
           <span class="cfg-object__title">${label}</span>
@@ -1097,6 +1143,7 @@ function renderArray(params: {
   }
 
   const arr = Array.isArray(value) ? value : Array.isArray(schema.default) ? schema.default : [];
+  const compositeItems = isCompositeSchema(itemsSchema);
 
   return html`
     <div class="cfg-array">
@@ -1125,10 +1172,17 @@ function renderArray(params: {
         : html`
             <div class="cfg-array__items">
               ${arr.map(
-                (item, idx) => html`
-                  <div class="cfg-array__item">
+                (item, idx) => {
+                  const itemSummary = summarizeStructuredValue(item);
+                  return html`
+                  <div class="cfg-array__item ${compositeItems ? "cfg-array__item--composite" : ""}">
                     <div class="cfg-array__item-header">
-                      <span class="cfg-array__item-index">#${idx + 1}</span>
+                      <span class="cfg-array__item-index-wrap">
+                        <span class="cfg-array__item-index">#${idx + 1}</span>
+                        ${itemSummary
+                          ? html`<span class="cfg-array__item-summary">${itemSummary}</span>`
+                          : nothing}
+                      </span>
                       <button
                         type="button"
                         class="cfg-array__item-remove"
@@ -1153,7 +1207,7 @@ function renderArray(params: {
                         unsupported,
                         disabled,
                         searchCriteria: childSearchCriteria,
-                        showLabel: false,
+                        showLabel: compositeItems,
                         revealSensitive,
                         isSensitivePathRevealed,
                         onToggleSensitivePath,
@@ -1161,7 +1215,8 @@ function renderArray(params: {
                       })}
                     </div>
                   </div>
-                `,
+                `;
+                },
               )}
             </div>
           `}
@@ -1200,6 +1255,7 @@ function renderMapField(params: {
     onToggleSensitivePath,
   } = params;
   const anySchema = isAnySchema(schema);
+  const compositeEntries = !anySchema && isCompositeSchema(schema);
   const entries = Object.entries(value ?? {}).filter(([key]) => !reservedKeys.has(key));
   const visibleEntries =
     searchCriteria && hasSearchCriteria(searchCriteria)
@@ -1346,7 +1402,7 @@ function renderMapField(params: {
                             unsupported,
                             disabled,
                             searchCriteria,
-                            showLabel: false,
+                            showLabel: compositeEntries,
                             revealSensitive,
                             isSensitivePathRevealed,
                             onToggleSensitivePath,

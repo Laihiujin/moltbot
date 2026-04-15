@@ -5,10 +5,26 @@ import { icons } from "../icons.ts";
 import { normalizeBasePath } from "../navigation.ts";
 import { agentLogoUrl } from "./agents-utils.ts";
 import { renderConnectCommand } from "./connect-command.ts";
+import { shouldShowGatewayPasswordInput } from "./overview-hints.ts";
 
 export function renderLoginGate(state: AppViewState) {
   const basePath = normalizeBasePath(state.basePath ?? "");
   const faviconSrc = agentLogoUrl(basePath);
+  const authModeFromHello =
+    state.hello?.snapshot &&
+    typeof state.hello.snapshot === "object" &&
+    state.hello.snapshot !== null &&
+    "authMode" in state.hello.snapshot
+      ? String((state.hello.snapshot as { authMode?: unknown }).authMode ?? "")
+      : null;
+  const authMode = authModeFromHello || state.gatewayAuthMode;
+  const showTokenInput = authMode !== "none" && authMode !== "password" && authMode !== "trusted-proxy";
+  const showPasswordInput = shouldShowGatewayPasswordInput({
+    authMode,
+    password: state.password,
+    lastErrorCode: state.lastErrorCode,
+  });
+  const bootstrapBusy = state.gatewayBootstrapBusy;
 
   return html`
     <div class="login-gate">
@@ -18,88 +34,106 @@ export function renderLoginGate(state: AppViewState) {
           <div class="login-gate__title">OpenClaw</div>
           <div class="login-gate__sub">${t("login.subtitle")}</div>
         </div>
-        <div class="login-gate__form">
-          <label class="field">
-            <span>${t("overview.access.wsUrl")}</span>
-            <input
-              .value=${state.settings.gatewayUrl}
-              @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                state.applySettings({ ...state.settings, gatewayUrl: v });
-              }}
-              placeholder="ws://127.0.0.1:18789"
-            />
-          </label>
-          <label class="field">
-            <span>${t("overview.access.token")}</span>
-            <div class="login-gate__secret-row">
-              <input
-                type=${state.loginShowGatewayToken ? "text" : "password"}
-                autocomplete="off"
-                spellcheck="false"
-                .value=${state.settings.token}
-                @input=${(e: Event) => {
-                  const v = (e.target as HTMLInputElement).value;
-                  state.applySettings({ ...state.settings, token: v });
-                }}
-                placeholder="OPENCLAW_GATEWAY_TOKEN (${t("login.passwordPlaceholder")})"
-                @keydown=${(e: KeyboardEvent) => {
-                  if (e.key === "Enter") {
-                    state.connect();
-                  }
-                }}
-              />
-              <button
-                type="button"
-                class="btn btn--icon ${state.loginShowGatewayToken ? "active" : ""}"
-                title=${state.loginShowGatewayToken ? "Hide token" : "Show token"}
-                aria-label="Toggle token visibility"
-                aria-pressed=${state.loginShowGatewayToken}
-                @click=${() => {
-                  state.loginShowGatewayToken = !state.loginShowGatewayToken;
-                }}
-              >
-                ${state.loginShowGatewayToken ? icons.eye : icons.eyeOff}
-              </button>
-            </div>
-          </label>
-          <label class="field">
-            <span>${t("overview.access.password")}</span>
-            <div class="login-gate__secret-row">
-              <input
-                type=${state.loginShowGatewayPassword ? "text" : "password"}
-                autocomplete="off"
-                spellcheck="false"
-                .value=${state.password}
-                @input=${(e: Event) => {
-                  const v = (e.target as HTMLInputElement).value;
-                  state.password = v;
-                }}
-                placeholder="${t("login.passwordPlaceholder")}"
-                @keydown=${(e: KeyboardEvent) => {
-                  if (e.key === "Enter") {
-                    state.connect();
-                  }
-                }}
-              />
-              <button
-                type="button"
-                class="btn btn--icon ${state.loginShowGatewayPassword ? "active" : ""}"
-                title=${state.loginShowGatewayPassword ? "Hide password" : "Show password"}
-                aria-label="Toggle password visibility"
-                aria-pressed=${state.loginShowGatewayPassword}
-                @click=${() => {
-                  state.loginShowGatewayPassword = !state.loginShowGatewayPassword;
-                }}
-              >
-                ${state.loginShowGatewayPassword ? icons.eye : icons.eyeOff}
-              </button>
-            </div>
-          </label>
-          <button class="btn primary login-gate__connect" @click=${() => state.connect()}>
-            ${t("common.connect")}
-          </button>
-        </div>
+        ${bootstrapBusy
+          ? html`
+              <div class="login-gate__form">
+                <div class="callout info" style="margin-top: 6px;">
+                  Preparing local gateway access...
+                </div>
+              </div>
+            `
+          : html`
+              <div class="login-gate__form">
+                <label class="field">
+                  <span>${t("overview.access.wsUrl")}</span>
+                  <input
+                    .value=${state.settings.gatewayUrl}
+                    @input=${(e: Event) => {
+                      const v = (e.target as HTMLInputElement).value;
+                      state.applySettings({ ...state.settings, gatewayUrl: v });
+                    }}
+                    placeholder="ws://127.0.0.1:18789"
+                  />
+                </label>
+                ${showTokenInput
+                  ? html`
+                      <label class="field">
+                        <span>${t("overview.access.token")}</span>
+                        <div class="login-gate__secret-row">
+                          <input
+                            type=${state.loginShowGatewayToken ? "text" : "password"}
+                            autocomplete="off"
+                            spellcheck="false"
+                            .value=${state.settings.token}
+                            @input=${(e: Event) => {
+                              const v = (e.target as HTMLInputElement).value;
+                              state.applySettings({ ...state.settings, token: v });
+                            }}
+                            placeholder="OPENCLAW_GATEWAY_TOKEN"
+                            @keydown=${(e: KeyboardEvent) => {
+                              if (e.key === "Enter") {
+                                state.connect();
+                              }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            class="btn btn--icon ${state.loginShowGatewayToken ? "active" : ""}"
+                            title=${state.loginShowGatewayToken ? "Hide token" : "Show token"}
+                            aria-label="Toggle token visibility"
+                            aria-pressed=${state.loginShowGatewayToken}
+                            @click=${() => {
+                              state.loginShowGatewayToken = !state.loginShowGatewayToken;
+                            }}
+                          >
+                            ${state.loginShowGatewayToken ? icons.eye : icons.eyeOff}
+                          </button>
+                        </div>
+                      </label>
+                    `
+                  : ""}
+                ${showPasswordInput
+                  ? html`
+                      <label class="field">
+                        <span>${t("overview.access.password")}</span>
+                        <div class="login-gate__secret-row">
+                          <input
+                            type=${state.loginShowGatewayPassword ? "text" : "password"}
+                            autocomplete="off"
+                            spellcheck="false"
+                            .value=${state.password}
+                            @input=${(e: Event) => {
+                              const v = (e.target as HTMLInputElement).value;
+                              state.password = v;
+                            }}
+                            placeholder="${t("login.passwordPlaceholder")}"
+                            @keydown=${(e: KeyboardEvent) => {
+                              if (e.key === "Enter") {
+                                state.connect();
+                              }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            class="btn btn--icon ${state.loginShowGatewayPassword ? "active" : ""}"
+                            title=${state.loginShowGatewayPassword ? "Hide password" : "Show password"}
+                            aria-label="Toggle password visibility"
+                            aria-pressed=${state.loginShowGatewayPassword}
+                            @click=${() => {
+                              state.loginShowGatewayPassword = !state.loginShowGatewayPassword;
+                            }}
+                          >
+                            ${state.loginShowGatewayPassword ? icons.eye : icons.eyeOff}
+                          </button>
+                        </div>
+                      </label>
+                    `
+                  : ""}
+                <button class="btn primary login-gate__connect" @click=${() => state.connect()}>
+                  ${t("common.connect")}
+                </button>
+              </div>
+            `}
         ${state.lastError
           ? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${state.lastError}</div>

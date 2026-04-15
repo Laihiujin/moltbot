@@ -17,7 +17,11 @@ import {
   restoreRedactedValues,
 } from "../../config/redact-snapshot.js";
 import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
-import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
+import {
+  lookupConfigSchema,
+  scopeConfigSchemaResponse,
+  type ConfigSchemaResponse,
+} from "../../config/schema.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -406,7 +410,13 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigSchemaParams, "config.schema", respond)) {
       return;
     }
-    respond(true, loadSchemaWithPlugins(), undefined);
+    const sections = Array.isArray((params as { sections?: unknown }).sections)
+      ? ((params as { sections?: string[] }).sections ?? [])
+      : [];
+    const schema = sections.length > 0
+      ? scopeConfigSchemaResponse(loadSchemaWithPlugins(), sections)
+      : loadSchemaWithPlugins();
+    respond(true, schema, undefined);
   },
   "config.schema.lookup": ({ params, respond, context }) => {
     if (

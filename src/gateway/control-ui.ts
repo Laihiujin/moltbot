@@ -18,6 +18,7 @@ import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import { resolveGatewayInteractiveSurfaceAuth } from "./auth-surface-resolution.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -50,6 +51,7 @@ export type ControlUiRequestOptions = {
   config?: OpenClawConfig;
   agentId?: string;
   root?: ControlUiRootState;
+  revealBootstrapAuth?: boolean;
 };
 
 export type ControlUiRootState =
@@ -528,11 +530,11 @@ function isSafeRelativePath(relPath: string) {
   return true;
 }
 
-export function handleControlUiHttpRequest(
+export async function handleControlUiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts?: ControlUiRequestOptions,
-): boolean {
+): Promise<boolean> {
   const urlRaw = req.url;
   if (!urlRaw) {
     return false;
@@ -584,10 +586,20 @@ export function handleControlUiHttpRequest(
       res.end();
       return true;
     }
+    const bootstrapAuth =
+      config && opts?.revealBootstrapAuth
+        ? await resolveGatewayInteractiveSurfaceAuth({
+            config,
+            env: process.env,
+          })
+        : undefined;
     sendJson(res, 200, {
       basePath,
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
+      authMode: config?.gateway?.auth?.mode,
+      token: bootstrapAuth?.token,
+      password: bootstrapAuth?.password,
       assistantAgentId: identity.agentId,
       serverVersion: resolveRuntimeServiceVersion(process.env),
       localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, identity.agentId)],

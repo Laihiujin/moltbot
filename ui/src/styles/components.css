@@ -253,6 +253,49 @@
   line-height: 1.5;
 }
 
+.channel-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.channel-card__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  width: 100%;
+  padding: 18px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.channel-card__header:hover {
+  background: var(--card-highlight);
+}
+
+.channel-card__header:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.channel-card__header-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.channel-card__body {
+  padding: 0 18px 18px;
+}
+
+.channel-card__header .collapse-chevron {
+  margin-top: 2px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
 /* ===========================================
    Stats - Bold values, subtle labels
    =========================================== */
@@ -4148,11 +4191,36 @@ td.data-table-key-col {
 .ov-access-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
 
 .ov-access-grid__full {
   grid-column: 1 / -1;
+}
+
+.ov-access-secret-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.ov-access-secret-row__input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ov-access-secret-row__toggle {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+}
+
+@media (max-width: 1200px) {
+  .ov-access-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* Bottom grid (event log + log tail) */

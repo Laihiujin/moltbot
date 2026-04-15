@@ -215,7 +215,7 @@ describe("lmstudio setup", () => {
 
   it("non-interactive setup discovers catalog and writes LM Studio provider config", async () => {
     const ctx = buildNonInteractiveContext({
-      customBaseUrl: "http://localhost:1234/api/v1/",
+      customBaseUrl: "http://localhost:7017/api/v1/models",
       customModelId: "qwen3-8b-instruct",
     });
     fetchLmstudioModelsMock.mockResolvedValueOnce({
@@ -238,12 +238,12 @@ describe("lmstudio setup", () => {
     const result = await configureLmstudioNonInteractive(ctx);
 
     expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
-      baseUrl: "http://localhost:1234/v1",
+      baseUrl: "http://localhost:7017/v1",
       apiKey: "lmstudio-test-key",
       timeoutMs: 5000,
     });
     expect(result?.models?.providers?.lmstudio).toMatchObject({
-      baseUrl: "http://localhost:1234/v1",
+      baseUrl: "http://localhost:7017/v1",
       api: "openai-completions",
       auth: "api-key",
       apiKey: "LM_API_TOKEN",

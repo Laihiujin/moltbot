@@ -347,6 +347,29 @@ export function buildEmbeddedRunPayloads(params: {
   }
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
+  const lastAssistantApi = (params.lastAssistant as { api?: unknown } | undefined)?.api;
+  const normalizedProvider = (params.provider ?? "").trim().toLowerCase();
+  const shouldSurfaceEmptyOpenAiCompatReply =
+    !suppressAssistantArtifacts &&
+    replyItems.length === 0 &&
+    !params.lastToolError &&
+    !params.didSendViaMessagingTool &&
+    params.lastAssistant?.stopReason === "stop" &&
+    Array.isArray(params.lastAssistant.content) &&
+    params.lastAssistant.content.length === 0 &&
+    typeof lastAssistantApi === "string" &&
+    lastAssistantApi === "openai-completions" &&
+    normalizedProvider.length > 0 &&
+    normalizedProvider !== "openai" &&
+    normalizedProvider !== "openai-codex";
+  if (shouldSurfaceEmptyOpenAiCompatReply) {
+    replyItems.push({
+      text:
+        "The model returned an empty reply. This usually means the provider API adapter is incompatible with the selected model. Try switching API mode (openai-completions vs anthropic-messages) or choose a different model.",
+      isError: true,
+    });
+  }
+
   return replyItems
     .map((item) => ({
       text: normalizeOptionalString(item.text),

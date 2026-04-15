@@ -35,6 +35,7 @@ import {
   parseSessionKey,
   resolveAssistantAttachmentAuthToken,
   resolveSessionDisplayName,
+  resolveSessionOptionGroups,
   switchChatSession,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -345,6 +346,75 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+describe("resolveSessionOptionGroups", () => {
+  function makeState(overrides: Partial<AppViewState> = {}): AppViewState {
+    return {
+      sessionsHideCron: true,
+      agentsList: { agents: [{ id: "main" }] },
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+          },
+        },
+      },
+      ...overrides,
+    } as unknown as AppViewState;
+  }
+
+  function sessions(rows: SessionRow[]): SessionsListResult {
+    return {
+      ts: 1,
+      path: "",
+      count: rows.length,
+      defaults: { modelProvider: "openai", model: "gpt-5.4", contextTokens: null },
+      sessions: rows,
+    };
+  }
+
+  it("pins the selectable main chat before channel sessions", () => {
+    const channelKey = "agent:main:feishu:g-ou_00dc7cb77c59e44962569bc2426770e5";
+    const groups = resolveSessionOptionGroups(
+      makeState(),
+      channelKey,
+      sessions([
+        row({ key: channelKey, kind: "group", updatedAt: 2 }),
+        row({ key: "agent:main:discord:g-1491763140206006282", kind: "group", updatedAt: 1 }),
+      ]),
+    );
+
+    const options = groups.flatMap((group) => group.options);
+    expect(options[0]).toMatchObject({
+      key: "agent:main:main",
+      label: "Main Chat",
+      scopeLabel: "Main Chat",
+    });
+    expect(options.map((option) => option.key)).toContain(channelKey);
+  });
+
+  it("keeps the active main alias selectable without duplicating other main aliases", () => {
+    const groups = resolveSessionOptionGroups(
+      makeState(),
+      "main",
+      sessions([
+        row({ key: "agent:main:main", kind: "direct", updatedAt: 2 }),
+        row({ key: "main", kind: "direct", updatedAt: 1 }),
+      ]),
+    );
+
+    const mainOptions = groups
+      .flatMap((group) => group.options)
+      .filter((option) => option.label === "Main Chat");
+    expect(mainOptions).toEqual([
+      expect.objectContaining({
+        key: "main",
+      }),
+    ]);
   });
 });
 

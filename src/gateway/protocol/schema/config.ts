@@ -7,6 +7,12 @@ const ConfigSchemaLookupPathString = Type.String({
   pattern: "^[A-Za-z0-9_./\\[\\]\\-*]+$",
 });
 
+const ConfigSchemaSectionString = Type.String({
+  minLength: 1,
+  maxLength: 128,
+  pattern: "^[A-Za-z0-9_-]+$",
+});
+
 export const ConfigGetParamsSchema = Type.Object({}, { additionalProperties: false });
 
 export const ConfigSetParamsSchema = Type.Object(
@@ -42,7 +48,17 @@ const ConfigApplyLikeParamsSchema = Type.Object(
 export const ConfigApplyParamsSchema = ConfigApplyLikeParamsSchema;
 export const ConfigPatchParamsSchema = ConfigApplyLikeParamsSchema;
 
-export const ConfigSchemaParamsSchema = Type.Object({}, { additionalProperties: false });
+export const ConfigSchemaParamsSchema = Type.Object(
+  {
+    sections: Type.Optional(
+      Type.Array(ConfigSchemaSectionString, {
+        minItems: 1,
+        maxItems: 32,
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 export const ConfigSchemaLookupParamsSchema = Type.Object(
   {

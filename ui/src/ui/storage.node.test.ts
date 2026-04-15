@@ -74,6 +74,16 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/apps/openclaw"));
   });
 
+  it("uses the local gateway default when running inside a Tauri host page", async () => {
+    setTestLocation({
+      protocol: "http:",
+      host: "tauri.localhost",
+      pathname: "/",
+    });
+
+    expect(loadSettings().gatewayUrl).toBe("ws://127.0.0.1:18789");
+  });
+
   it("skips node sessionStorage accessors that warn without a storage file", async () => {
     vi.unstubAllGlobals();
     vi.stubGlobal("localStorage", createStorageMock());

@@ -5,8 +5,10 @@ import type { GoogleChatStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   formatNullableBoolean,
+  isChannelCollapsed,
   renderSingleAccountChannelCard,
   resolveChannelConfigured,
+  toggleChannelCollapsed,
 } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
@@ -19,6 +21,8 @@ export function renderGoogleChatCard(params: {
   const configured = resolveChannelConfigured("googlechat", props);
 
   return renderSingleAccountChannelCard({
+    collapsed: isChannelCollapsed("googlechat", props),
+    onToggleCollapsed: toggleChannelCollapsed("googlechat", props),
     title: "Google Chat",
     subtitle: "Chat API webhook status and channel configuration.",
     accountCountLabel,

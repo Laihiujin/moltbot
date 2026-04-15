@@ -27,6 +27,12 @@ const INSECURE_CONTEXT_CODES = new Set<string>([
   ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
 ]);
 
+const PASSWORD_INPUT_CODES = new Set<string>([
+  ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
+  ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+  ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED,
+]);
+
 type AuthHintKind = "required" | "failed";
 
 /** Whether the overview should show device-pairing guidance for this error. */
@@ -87,4 +93,18 @@ export function shouldShowInsecureContextHint(
   }
   const lower = normalizeLowercaseStringOrEmpty(lastError);
   return lower.includes("secure context") || lower.includes("device identity required");
+}
+
+export function shouldShowGatewayPasswordInput(params: {
+  authMode?: string | null;
+  password?: string | null;
+  lastErrorCode?: string | null;
+}): boolean {
+  if (params.authMode === "password") {
+    return true;
+  }
+  if (typeof params.password === "string" && params.password.trim()) {
+    return true;
+  }
+  return Boolean(params.lastErrorCode && PASSWORD_INPUT_CODES.has(params.lastErrorCode));
 }

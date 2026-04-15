@@ -67,6 +67,10 @@ type GatewayHost = {
   password: string;
   clientInstanceId: string;
   client: GatewayBrowserClient | null;
+  gatewayBootstrapBusy?: boolean;
+  bootstrapLocalGatewayAccess?: () => Promise<void>;
+  desktopConnectRetryTimer?: number | null;
+  desktopConnectRetryAttempts?: number;
   connected: boolean;
   hello: GatewayHelloOk | null;
   lastError: string | null;
@@ -97,6 +101,10 @@ type GatewayHost = {
   updateAvailable: UpdateAvailable | null;
 };
 
+type GatewayHostWithDeferredSessionMessageReload = GatewayHost & {
+  pendingSessionMessageReloadSessionKey?: string | null;
+};
+
 type SessionDefaultsSnapshot = {
   defaultAgentId?: string;
   mainKey?: string;
@@ -121,8 +129,72 @@ function isTerminalChatState(
 }
 
 type ConnectGatewayOptions = {
-  reason?: "initial" | "seq-gap";
+  reason?: "initial" | "seq-gap" | "desktop-retry";
 };
+
+// Local desktop gateway cold starts on Windows can exceed a minute.
+const DESKTOP_GATEWAY_RETRY_LIMIT = 120;
+
+function clearDesktopReconnectTimer(host: GatewayHost) {
+  if (typeof host.desktopConnectRetryTimer === "number" && typeof window !== "undefined") {
+    window.clearTimeout(host.desktopConnectRetryTimer);
+  }
+  host.desktopConnectRetryTimer = null;
+}
+
+function isLocalDesktopGateway(host: GatewayHost): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  if (window.location.hostname !== "tauri.localhost") {
+    return false;
+  }
+  try {
+    const gatewayUrl = new URL(host.settings.gatewayUrl, window.location.href);
+    if (gatewayUrl.protocol !== "ws:" && gatewayUrl.protocol !== "wss:") {
+      return false;
+    }
+    return gatewayUrl.hostname === "127.0.0.1" || gatewayUrl.hostname === "localhost";
+  } catch {
+    return false;
+  }
+}
+
+function scheduleLocalDesktopReconnect(host: GatewayHost, client: GatewayBrowserClient): boolean {
+  if (!isLocalDesktopGateway(host)) {
+    return false;
+  }
+  const attempts = host.desktopConnectRetryAttempts ?? 0;
+  if (attempts >= DESKTOP_GATEWAY_RETRY_LIMIT || typeof window === "undefined") {
+    host.gatewayBootstrapBusy = false;
+    return false;
+  }
+  clearDesktopReconnectTimer(host);
+  host.connected = false;
+  host.lastError = null;
+  host.lastErrorCode = null;
+  host.gatewayBootstrapBusy = true;
+  host.desktopConnectRetryAttempts = attempts + 1;
+  const delayMs = Math.min(1500, 400 + attempts * 200);
+  host.desktopConnectRetryTimer = window.setTimeout(() => {
+    if (host.client !== client) {
+      return;
+    }
+    host.desktopConnectRetryTimer = null;
+    const bootstrapLocalGatewayAccess = host.bootstrapLocalGatewayAccess;
+    if (typeof bootstrapLocalGatewayAccess !== "function") {
+      connectGateway(host, { reason: "desktop-retry" });
+      return;
+    }
+    void bootstrapLocalGatewayAccess().finally(() => {
+      if (host.client !== client) {
+        return;
+      }
+      connectGateway(host, { reason: "desktop-retry" });
+    });
+  }, delayMs);
+  return true;
+}
 
 export function resolveControlUiClientVersion(params: {
   gatewayUrl: string;
@@ -227,6 +299,10 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
 export function connectGateway(host: GatewayHost, options?: ConnectGatewayOptions) {
   const shutdownHost = host as GatewayHostWithShutdownMessage;
   const reconnectReason = options?.reason ?? "initial";
+  clearDesktopReconnectTimer(host);
+  if (reconnectReason !== "desktop-retry") {
+    host.desktopConnectRetryAttempts = 0;
+  }
   shutdownHost.pendingShutdownMessage = null;
   shutdownHost.resumeChatQueueAfterReconnect = false;
   host.lastError = null;
@@ -263,6 +339,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       shutdownHost.pendingShutdownMessage = null;
+      clearDesktopReconnectTimer(host);
+      host.desktopConnectRetryAttempts = 0;
+      host.gatewayBootstrapBusy = false;
       host.connected = true;
       host.lastError = null;
       host.lastErrorCode = null;
@@ -295,6 +374,14 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       if (host.client !== client) {
         return;
       }
+      const shouldRetryLocalDesktop =
+        !resolveGatewayErrorDetailCode(error) &&
+        !error?.code &&
+        scheduleLocalDesktopReconnect(host, client);
+      if (shouldRetryLocalDesktop) {
+        return;
+      }
+      host.gatewayBootstrapBusy = false;
       host.connected = false;
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       host.lastErrorCode =
@@ -409,7 +496,25 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   }
   const state = handleChatEvent(host as unknown as ChatState, payload);
   const historyReloaded = handleTerminalChatEvent(host, payload, state);
+  const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
+  const deferredSessionKey = deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim();
+  const payloadSessionKey = payload?.sessionKey?.trim();
+  const shouldReplayDeferredSessionMessageReload = Boolean(
+    deferredSessionKey &&
+    payloadSessionKey &&
+    deferredSessionKey === payloadSessionKey &&
+    isTerminalChatState(state) &&
+    payloadSessionKey === host.sessionKey &&
+    !host.chatRunId,
+  );
+  if (deferredSessionKey && payloadSessionKey && deferredSessionKey === payloadSessionKey) {
+    deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
+  }
   if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
+    void loadChatHistory(host as unknown as ChatState);
+    return;
+  }
+  if (shouldReplayDeferredSessionMessageReload && !historyReloaded) {
     void loadChatHistory(host as unknown as ChatState);
   }
 }
@@ -418,10 +523,21 @@ function handleSessionMessageGatewayEvent(
   host: GatewayHost,
   payload: { sessionKey?: string } | undefined,
 ) {
+  const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
   const sessionKey = payload?.sessionKey?.trim();
   if (!sessionKey || sessionKey !== host.sessionKey) {
     return;
   }
+  // Skip history reload while a chat run is active. The chat event handler
+  // manages streaming state and appends the final assistant message. Reloading
+  // history mid-run races with the optimistic user-message update and resets
+  // chatStream, which delays the user message card from appearing until the
+  // first LLM delta arrives.
+  if (host.chatRunId) {
+    deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
+    return;
+  }
+  deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
   void loadChatHistory(host as unknown as ChatState);
 }
 

@@ -5,8 +5,10 @@ import type { DiscordStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   formatNullableBoolean,
+  isChannelCollapsed,
   renderSingleAccountChannelCard,
   resolveChannelConfigured,
+  toggleChannelCollapsed,
 } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
@@ -19,6 +21,8 @@ export function renderDiscordCard(params: {
   const configured = resolveChannelConfigured("discord", props);
 
   return renderSingleAccountChannelCard({
+    collapsed: isChannelCollapsed("discord", props),
+    onToggleCollapsed: toggleChannelCollapsed("discord", props),
     title: "Discord",
     subtitle: "Bot status and channel configuration.",
     accountCountLabel,

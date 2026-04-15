@@ -136,6 +136,91 @@ function maybeResetToolStream(state: ChatState) {
   }
 }
 
+function messageTimestamp(message: unknown): number | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const timestamp = (message as { timestamp?: unknown }).timestamp;
+  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function messageIdentityKey(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const entry = message as Record<string, unknown>;
+  const role = normalizeLowercaseStringOrEmpty(entry.role);
+  if (!role) {
+    return null;
+  }
+  const text = extractText(message);
+  if (typeof text !== "string" || !text.trim()) {
+    return null;
+  }
+  return `${role}:${text.trim()}`;
+}
+
+function isSemanticallyDuplicateMessage(candidate: unknown, loaded: unknown): boolean {
+  const candidateKey = messageIdentityKey(candidate);
+  const loadedKey = messageIdentityKey(loaded);
+  if (!candidateKey || candidateKey !== loadedKey) {
+    return false;
+  }
+  const candidateTimestamp = messageTimestamp(candidate);
+  const loadedTimestamp = messageTimestamp(loaded);
+  if (candidateTimestamp == null || loadedTimestamp == null) {
+    return true;
+  }
+  return Math.abs(candidateTimestamp - loadedTimestamp) <= 120_000;
+}
+
+function mergeLoadedHistoryWithPendingMessages(
+  loadedMessages: unknown[],
+  localMessages: unknown[],
+): unknown[] {
+  if (localMessages.length === 0) {
+    return loadedMessages;
+  }
+  const merged = [...loadedMessages];
+  for (const localMessage of localMessages) {
+    if (shouldHideHistoryMessage(localMessage)) {
+      continue;
+    }
+    const alreadyLoaded = loadedMessages.some((loadedMessage) =>
+      isSemanticallyDuplicateMessage(localMessage, loadedMessage),
+    );
+    if (!alreadyLoaded) {
+      merged.push(localMessage);
+    }
+  }
+  return merged;
+}
+
+function shouldPreserveRecentLocalMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
+  if (role !== "user") {
+    return false;
+  }
+  const timestamp = messageTimestamp(message);
+  if (timestamp == null) {
+    return false;
+  }
+  return Date.now() - timestamp <= 120_000;
+}
+
+function mergeLoadedHistoryWithRecentLocalMessages(
+  loadedMessages: unknown[],
+  localMessages: unknown[],
+): unknown[] {
+  const recentLocalMessages = localMessages.filter((message) =>
+    shouldPreserveRecentLocalMessage(message),
+  );
+  return mergeLoadedHistoryWithPendingMessages(loadedMessages, recentLocalMessages);
+}
+
 export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
@@ -177,7 +262,11 @@ export async function loadChatHistory(state: ChatState) {
       return;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    state.chatMessages =
+      state.chatSending || state.chatRunId
+        ? mergeLoadedHistoryWithPendingMessages(visibleMessages, state.chatMessages)
+        : mergeLoadedHistoryWithRecentLocalMessages(visibleMessages, state.chatMessages);
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.

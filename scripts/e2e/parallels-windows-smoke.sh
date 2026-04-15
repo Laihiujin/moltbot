@@ -20,6 +20,7 @@ UPGRADE_FROM_PACKED_MAIN=0
 JSON_OUTPUT=0
 KEEP_SERVER=0
 CHECK_LATEST_REF=1
+AUTH_SMOKE_PASSWORD="OpenClawSmokePassword!"
 SNAPSHOT_ID=""
 SNAPSHOT_STATE=""
 SNAPSHOT_NAME=""
@@ -39,7 +40,8 @@ RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-windows.XXXXXX)"
 BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 
 TIMEOUT_SNAPSHOT_S=240
-TIMEOUT_INSTALL_S=1200
+TIMEOUT_GIT_SETUP_S=1200
+TIMEOUT_INSTALL_S=300
 TIMEOUT_VERIFY_S=120
 TIMEOUT_ONBOARD_S=240
 TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 60))
@@ -51,12 +53,14 @@ FRESH_MAIN_STATUS="skip"
 FRESH_MAIN_VERSION="skip"
 FRESH_GATEWAY_STATUS="skip"
 FRESH_AGENT_STATUS="skip"
+FRESH_DASHBOARD_STATUS="skip"
 UPGRADE_STATUS="skip"
 UPGRADE_PRECHECK_STATUS="skip"
 LATEST_INSTALLED_VERSION="skip"
 UPGRADE_MAIN_VERSION="skip"
 UPGRADE_GATEWAY_STATUS="skip"
 UPGRADE_AGENT_STATUS="skip"
+UPGRADE_DASHBOARD_STATUS="skip"
 
 say() {
   printf '==> %s\n' "$*"
@@ -732,12 +736,48 @@ print(matches[-1] if matches else "")
 PY
 }
 
+scenario_summary_path() {
+  printf '%s/%s-%s-summary.json\n' "$RUN_DIR" "$1" "$2"
+}
+
+detect_fatal_errors_for_prefix() {
+  local prefix="$1"
+  python3 - "$RUN_DIR" "$prefix" <<'PY'
+import pathlib
+import re
+import sys
+
+run_dir = pathlib.Path(sys.argv[1])
+prefix = sys.argv[2]
+pattern = re.compile(r"(fatal|uncaught|panic|traceback|segmentation fault)", re.IGNORECASE)
+found = False
+for path in sorted(run_dir.glob(f"{prefix}*.log")):
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        continue
+    if pattern.search(text):
+        found = True
+        break
+print("true" if found else "false")
+PY
+}
+
 write_summary_json() {
   local summary_path="$RUN_DIR/summary.json"
   python3 - "$summary_path" <<'PY'
 import json
 import os
 import sys
+from pathlib import Path
+
+def load_optional(path_value):
+    if not path_value:
+        return None
+    path = Path(path_value)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
 
 summary = {
     "vm": os.environ["SUMMARY_VM"],
@@ -755,14 +795,24 @@ summary = {
         "version": os.environ["SUMMARY_FRESH_MAIN_VERSION"],
         "gateway": os.environ["SUMMARY_FRESH_GATEWAY_STATUS"],
         "agent": os.environ["SUMMARY_FRESH_AGENT_STATUS"],
+        "dashboard": os.environ["SUMMARY_FRESH_DASHBOARD_STATUS"],
+        "authScenarios": {
+            "autoEntry": load_optional(os.environ.get("SUMMARY_FRESH_AUTO_ENTRY_PATH")),
+            "passwordEntry": load_optional(os.environ.get("SUMMARY_FRESH_PASSWORD_ENTRY_PATH")),
+        },
     },
     "upgrade": {
+        "path": os.environ["SUMMARY_UPGRADE_PATH_LABEL"],
         "precheck": os.environ["SUMMARY_UPGRADE_PRECHECK_STATUS"],
         "status": os.environ["SUMMARY_UPGRADE_STATUS"],
         "latestVersionInstalled": os.environ["SUMMARY_LATEST_INSTALLED_VERSION"],
         "mainVersion": os.environ["SUMMARY_UPGRADE_MAIN_VERSION"],
         "gateway": os.environ["SUMMARY_UPGRADE_GATEWAY_STATUS"],
         "agent": os.environ["SUMMARY_UPGRADE_AGENT_STATUS"],
+        "dashboard": os.environ["SUMMARY_UPGRADE_DASHBOARD_STATUS"],
+        "authScenarios": {
+            "autoEntry": load_optional(os.environ.get("SUMMARY_UPGRADE_AUTO_ENTRY_PATH")),
+        },
     },
 }
 with open(sys.argv[1], "w", encoding="utf-8") as handle:
@@ -1935,6 +1985,11 @@ verify_version_contains() {
 }
 
 write_onboard_runner_script() {
+  local auth_scenario="${1:-auto-entry}"
+  local auth_args=""
+  if [[ "$auth_scenario" == "password-entry" ]]; then
+    auth_args="--gateway-auth password --gateway-password ${AUTH_SMOKE_PASSWORD}"
+  fi
   WINDOWS_ONBOARD_SCRIPT_PATH="$MAIN_TGZ_DIR/openclaw-onboard-$PROVIDER.ps1"
   cat >"$WINDOWS_ONBOARD_SCRIPT_PATH" <<EOF
 param(
@@ -1947,7 +2002,7 @@ param(
 
 try {
   \$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
-  \$cmdLine = ('"{0}" onboard --non-interactive --mode local --auth-choice ${AUTH_CHOICE} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --skip-health --accept-risk --json > "{1}" 2>&1' -f \$openclaw, \$LogPath)
+  \$cmdLine = ('"{0}" onboard --non-interactive --mode local --auth-choice ${AUTH_CHOICE} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback ${auth_args} --install-daemon --skip-skills --skip-health --accept-risk --json > "{1}" 2>&1' -f \$openclaw, \$LogPath)
   & cmd.exe /d /s /c \$cmdLine
   Set-Content -Path \$DonePath -Value ([string]\$LASTEXITCODE)
 } catch {
@@ -1962,12 +2017,13 @@ EOF
 }
 
 run_ref_onboard() {
+  local auth_scenario="${1:-auto-entry}"
   local api_key_env_q api_key_value_q script_url
   local runner_name log_name done_name done_status launcher_state
   local poll_rc state_rc log_rc start_seconds poll_deadline startup_checked
   api_key_env_q="$(ps_single_quote "$API_KEY_ENV")"
   api_key_value_q="$(ps_single_quote "$API_KEY_VALUE")"
-  write_onboard_runner_script
+  write_onboard_runner_script "$auth_scenario"
   script_url="http://$HOST_IP:$HOST_PORT/$(basename "$WINDOWS_ONBOARD_SCRIPT_PATH")"
   runner_name="openclaw-onboard-$RANDOM-$RANDOM.ps1"
   log_name="openclaw-onboard-$RANDOM-$RANDOM.log"
@@ -2227,6 +2283,89 @@ verify_turn() {
     agent --agent main --message "Reply with exact ASCII text OK only." --json
 }
 
+verify_dashboard_load() {
+  guest_powershell "$(cat <<'EOF'
+$deadline = (Get-Date).AddSeconds(30)
+$ready = $false
+while ((Get-Date) -lt $deadline) {
+  try {
+    $response = Invoke-WebRequest -Uri 'http://127.0.0.1:18789/' -UseBasicParsing -TimeoutSec 5
+    $content = $response.Content
+    if ($content.Contains('<title>OpenClaw Control</title>') -and $content.Contains('<openclaw-app></openclaw-app>')) {
+      $ready = $true
+      break
+    }
+  } catch {
+  }
+  Start-Sleep -Seconds 1
+}
+if (-not $ready) {
+  throw 'dashboard HTML did not become ready at http://127.0.0.1:18789/'
+}
+EOF
+)"
+}
+
+inspect_gateway_auth() {
+  guest_powershell "$(cat <<'EOF'
+$configPath = Join-Path $env:USERPROFILE '.openclaw\openclaw.json'
+if (-not (Test-Path $configPath)) {
+  @{ mode = $null; hasToken = $false; hasPassword = $false } | ConvertTo-Json -Compress
+  return
+}
+$raw = Get-Content $configPath -Raw | ConvertFrom-Json -Depth 100
+$gateway = $raw.gateway
+$auth = $gateway.auth
+$token = $auth.token
+$password = $auth.password
+function Has-PlainSecret([object]$value) {
+  if ($value -isnot [string]) {
+    return $false
+  }
+  $trimmed = $value.Trim()
+  return $trimmed.Length -gt 0 -and -not $trimmed.StartsWith('${')
+}
+@{
+  mode = $auth.mode
+  hasToken = (Has-PlainSecret $token)
+  hasPassword = (Has-PlainSecret $password)
+} | ConvertTo-Json -Compress
+EOF
+)"
+}
+
+write_auth_scenario_summary() {
+  local lane="$1"
+  local scenario="$2"
+  local status="$3"
+  local gateway_status="$4"
+  local dashboard_status="$5"
+  local agent_status="$6"
+  local auth_json fatal_errors
+  auth_json="$(inspect_gateway_auth)"
+  fatal_errors="$(detect_fatal_errors_for_prefix "$lane.$scenario.")"
+  python3 - "$(scenario_summary_path "$lane" "$scenario")" "$scenario" "$status" "$gateway_status" "$dashboard_status" "$agent_status" "$fatal_errors" "$auth_json" <<'PY'
+import json
+import sys
+
+path, scenario, status, gateway_status, dashboard_status, agent_status, fatal_errors, auth_json = sys.argv[1:]
+auth = json.loads(auth_json)
+summary = {
+    "scenario": scenario,
+    "status": status,
+    "gateway": gateway_status,
+    "dashboard": dashboard_status,
+    "agent": agent_status,
+    "authModeUsed": auth.get("mode"),
+    "autoTokenAcquired": scenario == "auto-entry" and auth.get("mode") == "token" and auth.get("hasToken") and not auth.get("hasPassword"),
+    "enteredWithoutManualCredential": scenario == "auto-entry",
+    "fatalErrorsDetected": fatal_errors == "true",
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(summary, handle, indent=2, sort_keys=True)
+PY
+}
+
 capture_latest_ref_failure() {
   set +e
   run_ref_onboard
@@ -2249,9 +2388,9 @@ run_fresh_main_lane() {
   local install_log_phase
   phase_run "fresh.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id" || return $?
   phase_run "fresh.wait-for-user" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
-  if ! phase_run "fresh.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip"; then
+  if ! phase_run "fresh.ensure-git" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip"; then
     phase_run "fresh.wait-for-user-retry" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
-    phase_run "fresh.ensure-git-retry" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip" || return $?
+    phase_run "fresh.ensure-git-retry" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip" || return $?
   fi
   if phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz"; then
     install_log_phase="fresh.install-main"
@@ -2262,11 +2401,19 @@ run_fresh_main_lane() {
   fi
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path "$install_log_phase")")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
-  phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_PHASE_S" run_ref_onboard || return $?
-  phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_reachable || return $?
+  phase_run "fresh.auto-entry.onboard-ref" "$TIMEOUT_ONBOARD_PHASE_S" run_ref_onboard "auto-entry" || return $?
+  phase_run "fresh.auto-entry.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_reachable || return $?
   FRESH_GATEWAY_STATUS="pass"
-  phase_run "fresh.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn || return $?
+  phase_run "fresh.auto-entry.dashboard-load" "$TIMEOUT_GATEWAY_S" verify_dashboard_load || return $?
+  FRESH_DASHBOARD_STATUS="pass"
+  phase_run "fresh.auto-entry.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn || return $?
   FRESH_AGENT_STATUS="pass"
+  write_auth_scenario_summary "fresh" "auto-entry" "pass" "pass" "pass" "pass"
+  phase_run "fresh.password-entry.onboard-ref" "$TIMEOUT_ONBOARD_PHASE_S" run_ref_onboard "password-entry" || return $?
+  phase_run "fresh.password-entry.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_reachable || return $?
+  phase_run "fresh.password-entry.dashboard-load" "$TIMEOUT_GATEWAY_S" verify_dashboard_load || return $?
+  phase_run "fresh.password-entry.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn || return $?
+  write_auth_scenario_summary "fresh" "password-entry" "pass" "pass" "pass" "pass"
 }
 
 run_upgrade_lane() {
@@ -2275,9 +2422,9 @@ run_upgrade_lane() {
   local baseline_version
   phase_run "upgrade.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id" || return $?
   phase_run "upgrade.wait-for-user" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
-  if ! phase_run "upgrade.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip"; then
+  if ! phase_run "upgrade.ensure-git" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip"; then
     phase_run "upgrade.wait-for-user-retry" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
-    phase_run "upgrade.ensure-git-retry" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip" || return $?
+    phase_run "upgrade.ensure-git-retry" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip" || return $?
   fi
   if upgrade_uses_host_tgz; then
     phase_run "upgrade.install-baseline-package" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz" || return $?
@@ -2305,12 +2452,15 @@ run_upgrade_lane() {
   # gateway auth. Restarting first can leave the old token alive and make the
   # onboard health probe fail against a stale daemon.
   phase_run "upgrade.gateway-stop" "$TIMEOUT_GATEWAY_S" stop_gateway || return $?
-  phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_PHASE_S" run_ref_onboard || return $?
-  phase_run "upgrade.gateway-restart" "$TIMEOUT_GATEWAY_S" restart_gateway || return $?
-  phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_reachable || return $?
+  phase_run "upgrade.auto-entry.onboard-ref" "$TIMEOUT_ONBOARD_PHASE_S" run_ref_onboard "auto-entry" || return $?
+  phase_run "upgrade.auto-entry.gateway-restart" "$TIMEOUT_GATEWAY_S" restart_gateway || return $?
+  phase_run "upgrade.auto-entry.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_reachable || return $?
   UPGRADE_GATEWAY_STATUS="pass"
-  phase_run "upgrade.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn || return $?
+  phase_run "upgrade.auto-entry.dashboard-load" "$TIMEOUT_GATEWAY_S" verify_dashboard_load || return $?
+  UPGRADE_DASHBOARD_STATUS="pass"
+  phase_run "upgrade.auto-entry.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn || return $?
   UPGRADE_AGENT_STATUS="pass"
+  write_auth_scenario_summary "upgrade" "auto-entry" "pass" "pass" "pass" "pass"
 }
 
 IFS=$'\t' read -r SNAPSHOT_ID SNAPSHOT_STATE SNAPSHOT_NAME <<<"$(resolve_snapshot_info)"
@@ -2378,12 +2528,18 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_FRESH_MAIN_VERSION="$FRESH_MAIN_VERSION" \
   SUMMARY_FRESH_GATEWAY_STATUS="$FRESH_GATEWAY_STATUS" \
   SUMMARY_FRESH_AGENT_STATUS="$FRESH_AGENT_STATUS" \
+  SUMMARY_FRESH_DASHBOARD_STATUS="$FRESH_DASHBOARD_STATUS" \
+  SUMMARY_FRESH_AUTO_ENTRY_PATH="$(scenario_summary_path fresh auto-entry)" \
+  SUMMARY_FRESH_PASSWORD_ENTRY_PATH="$(scenario_summary_path fresh password-entry)" \
   SUMMARY_UPGRADE_PRECHECK_STATUS="$UPGRADE_PRECHECK_STATUS" \
   SUMMARY_UPGRADE_STATUS="$UPGRADE_STATUS" \
   SUMMARY_LATEST_INSTALLED_VERSION="$LATEST_INSTALLED_VERSION" \
   SUMMARY_UPGRADE_MAIN_VERSION="$UPGRADE_MAIN_VERSION" \
   SUMMARY_UPGRADE_GATEWAY_STATUS="$UPGRADE_GATEWAY_STATUS" \
   SUMMARY_UPGRADE_AGENT_STATUS="$UPGRADE_AGENT_STATUS" \
+  SUMMARY_UPGRADE_DASHBOARD_STATUS="$UPGRADE_DASHBOARD_STATUS" \
+  SUMMARY_UPGRADE_AUTO_ENTRY_PATH="$(scenario_summary_path upgrade auto-entry)" \
+  SUMMARY_UPGRADE_PATH_LABEL="$(upgrade_summary_label)" \
   write_summary_json
 )"
 
@@ -2400,9 +2556,9 @@ else
   if [[ -n "$INSTALL_VERSION" ]]; then
     printf '  baseline-install-version: %s\n' "$INSTALL_VERSION"
   fi
-  printf '  fresh-main: %s (%s)\n' "$FRESH_MAIN_STATUS" "$FRESH_MAIN_VERSION"
+  printf '  fresh-main: %s (%s) dashboard=%s\n' "$FRESH_MAIN_STATUS" "$FRESH_MAIN_VERSION" "$FRESH_DASHBOARD_STATUS"
   printf '  %s precheck: %s (%s)\n' "$(upgrade_summary_label)" "$UPGRADE_PRECHECK_STATUS" "$LATEST_INSTALLED_VERSION"
-  printf '  %s: %s (%s)\n' "$(upgrade_summary_label)" "$UPGRADE_STATUS" "$UPGRADE_MAIN_VERSION"
+  printf '  %s: %s (%s) dashboard=%s\n' "$(upgrade_summary_label)" "$UPGRADE_STATUS" "$UPGRADE_MAIN_VERSION" "$UPGRADE_DASHBOARD_STATUS"
   printf '  logs: %s\n' "$RUN_DIR"
   printf '  summary: %s\n' "$SUMMARY_JSON_PATH"
 fi

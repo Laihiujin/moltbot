@@ -24,6 +24,93 @@ function normalizeEnum(values: unknown[]): { enumValues: unknown[]; nullable: bo
   return { enumValues, nullable };
 }
 
+function isObjectLikeSchema(schema: JsonSchema): boolean {
+  const type = schemaType(schema);
+  return type === "object" || Boolean(schema.properties || schema.additionalProperties);
+}
+
+function cloneSchemaNode(schema: JsonSchema): JsonSchema {
+  return JSON.parse(JSON.stringify(schema)) as JsonSchema;
+}
+
+function mergeIntersectionObjectSchemas(entries: JsonSchema[], outer: JsonSchema): JsonSchema | null {
+  if (entries.length === 0 || !entries.every((entry) => isObjectLikeSchema(entry))) {
+    return null;
+  }
+
+  const mergedRequired = new Set<string>();
+  let hasExplicitAdditionalProperties = false;
+  let mergedAdditionalProperties: JsonSchema | boolean | undefined = undefined;
+  const mergedProperties: Record<string, JsonSchema> = {};
+
+  for (const entry of entries) {
+    for (const key of entry.required ?? []) {
+      mergedRequired.add(key);
+    }
+    for (const [key, value] of Object.entries(entry.properties ?? {})) {
+      mergedProperties[key] = cloneSchemaNode(value);
+    }
+    if (entry.additionalProperties !== undefined) {
+      hasExplicitAdditionalProperties = true;
+      mergedAdditionalProperties = entry.additionalProperties;
+    }
+  }
+
+  return {
+    ...outer,
+    type: "object",
+    properties: mergedProperties,
+    required: Array.from(mergedRequired),
+    ...(hasExplicitAdditionalProperties
+      ? { additionalProperties: mergedAdditionalProperties }
+      : {}),
+    anyOf: undefined,
+    oneOf: undefined,
+    allOf: undefined,
+  };
+}
+
+function mergeUnionObjectSchemas(entries: JsonSchema[], outer: JsonSchema): JsonSchema | null {
+  if (entries.length === 0 || !entries.every((entry) => isObjectLikeSchema(entry))) {
+    return null;
+  }
+
+  const mergedProperties: Record<string, JsonSchema> = {};
+  let requiredIntersection: Set<string> | null = null;
+  let allAdditionalPropertiesFalse = true;
+
+  for (const entry of entries) {
+    const required = new Set(entry.required ?? []);
+    requiredIntersection =
+      requiredIntersection == null
+        ? required
+        : new Set([...requiredIntersection].filter((key) => required.has(key)));
+
+    for (const [key, value] of Object.entries(entry.properties ?? {})) {
+      if (!(key in mergedProperties)) {
+        mergedProperties[key] = cloneSchemaNode(value);
+      }
+    }
+
+    if (entry.additionalProperties !== false) {
+      allAdditionalPropertiesFalse = false;
+    }
+  }
+
+  return {
+    ...outer,
+    type: "object",
+    properties: mergedProperties,
+    ...(requiredIntersection && requiredIntersection.size > 0
+      ? { required: Array.from(requiredIntersection) }
+      : { required: [] }),
+    ...(allAdditionalPropertiesFalse ? { additionalProperties: false } : {}),
+    anyOf: undefined,
+    oneOf: undefined,
+    allOf: undefined,
+  };
+}
+
 export function analyzeConfigSchema(raw: unknown): ConfigSchemaAnalysis {
   if (!raw || typeof raw !== "object") {
     return { schema: null, unsupportedPaths: ["<root>"] };
@@ -39,10 +126,17 @@ function normalizeSchemaNode(
   const normalized: JsonSchema = { ...schema };
   const pathLabel = pathKey(path) || "<root>";
 
-  if (schema.anyOf || schema.oneOf || schema.allOf) {
+  if (schema.anyOf || schema.oneOf) {
     const union = normalizeUnion(schema, path);
     if (union) {
       return union;
+    }
+    return { schema, unsupportedPaths: [pathLabel] };
+  }
+  if (schema.allOf) {
+    const intersection = normalizeIntersection(schema, path);
+    if (intersection) {
+      return intersection;
     }
     return { schema, unsupportedPaths: [pathLabel] };
   }
@@ -119,6 +213,23 @@ function normalizeSchemaNode(
   };
 }
 
+function normalizeIntersection(
+  schema: JsonSchema,
+  path: Array<string | number>,
+): ConfigSchemaAnalysis | null {
+  const allOf = schema.allOf;
+  if (!allOf || allOf.length === 0) {
+    return null;
+  }
+
+  const merged = mergeIntersectionObjectSchemas(allOf, schema);
+  if (!merged) {
+    return null;
+  }
+
+  return normalizeSchemaNode(merged, path);
+}
+
 function isSecretRefVariant(entry: JsonSchema): boolean {
   if (schemaType(entry) !== "object") {
     return false;
@@ -175,9 +286,6 @@ function normalizeUnion(
   schema: JsonSchema,
   path: Array<string | number>,
 ): ConfigSchemaAnalysis | null {
-  if (schema.allOf) {
-    return null;
-  }
   const union = schema.anyOf ?? schema.oneOf;
   if (!union) {
     return null;
@@ -186,32 +294,44 @@ function normalizeUnion(
   const literals: unknown[] = [];
   const remaining: JsonSchema[] = [];
   let nullable = false;
+  const aggregatedUnsupported = new Set<string>();
 
-  for (const entry of union) {
+  for (const rawEntry of union) {
+    const entry =
+      rawEntry.allOf != null
+        ? normalizeIntersection(rawEntry, path)
+        : { schema: rawEntry, unsupportedPaths: [] };
+    if (!entry?.schema) {
+      return null;
+    }
+    for (const unsupportedPath of entry.unsupportedPaths) {
+      aggregatedUnsupported.add(unsupportedPath);
+    }
+
     if (!entry || typeof entry !== "object") {
       return null;
     }
-    if (Array.isArray(entry.enum)) {
-      const { enumValues, nullable: enumNullable } = normalizeEnum(entry.enum);
+    if (Array.isArray(entry.schema.enum)) {
+      const { enumValues, nullable: enumNullable } = normalizeEnum(entry.schema.enum);
       literals.push(...enumValues);
       if (enumNullable) {
         nullable = true;
       }
       continue;
     }
-    if ("const" in entry) {
-      if (entry.const == null) {
+    if ("const" in entry.schema) {
+      if (entry.schema.const == null) {
         nullable = true;
         continue;
       }
-      literals.push(entry.const);
+      literals.push(entry.schema.const);
       continue;
     }
-    if (schemaType(entry) === "null") {
+    if (schemaType(entry.schema) === "null") {
       nullable = true;
       continue;
     }
-    remaining.push(entry);
+    remaining.push(entry.schema);
   }
 
   // Config secrets accept either a raw key string or a structured secret ref object.
@@ -237,7 +357,7 @@ function normalizeUnion(
         oneOf: undefined,
         allOf: undefined,
       },
-      unsupportedPaths: [],
+      unsupportedPaths: Array.from(aggregatedUnsupported),
     };
   }
 
@@ -246,7 +366,28 @@ function normalizeUnion(
     if (res.schema) {
       res.schema.nullable = nullable || res.schema.nullable;
     }
+    for (const unsupportedPath of aggregatedUnsupported) {
+      res.unsupportedPaths.push(unsupportedPath);
+    }
     return res;
+  }
+
+  const mergedObjectUnion = mergeUnionObjectSchemas(remaining, schema);
+  if (mergedObjectUnion) {
+    const res = normalizeSchemaNode(
+      {
+        ...mergedObjectUnion,
+        nullable,
+      },
+      path,
+    );
+    for (const unsupportedPath of aggregatedUnsupported) {
+      res.unsupportedPaths.push(unsupportedPath);
+    }
+    return {
+      schema: res.schema,
+      unsupportedPaths: Array.from(new Set(res.unsupportedPaths)),
+    };
   }
 
   const renderableUnionTypes = new Set([
@@ -270,7 +411,7 @@ function normalizeUnion(
         ...schema,
         nullable,
       },
-      unsupportedPaths: [],
+      unsupportedPaths: Array.from(aggregatedUnsupported),
     };
   }
 

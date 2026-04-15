@@ -217,14 +217,14 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: { plugins: { entries: { demo: { enabled: true } } } },
-        cache: false,
+        cache: true,
       }),
     );
     expect(channelProps?.telegram).toBeTruthy();
     expect(channelProps?.matrix).toBeTruthy();
   });
 
-  it("does not activate or replace the active plugin registry across repeated schema loads (regression guard for #54816)", () => {
+  it("reuses the cached gateway schema without replacing the active plugin registry", () => {
     // Each MCP connection triggers a config.schema / config.get gateway request which calls
     // loadGatewayRuntimeConfigSchema. The original bug caused a fresh full plugin registry to
     // be activated on every call, re-running registerFull for all channel plugins including
@@ -234,13 +234,16 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     setActivePluginRegistry(activeRegistry, "startup-registry");
     const versionBefore = getActivePluginRegistryVersion();
 
-    loadGatewayRuntimeConfigSchema();
-    loadGatewayRuntimeConfigSchema();
-    loadGatewayRuntimeConfigSchema();
+    const first = loadGatewayRuntimeConfigSchema();
+    const second = loadGatewayRuntimeConfigSchema();
 
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(3);
+    expect(first).toBe(second);
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(2);
     for (const call of mockLoadPluginManifestRegistry.mock.calls) {
-      expect(call[0]).toMatchObject({ cache: false });
+      expect(call[0]).toMatchObject({
+        config: { plugins: { entries: { demo: { enabled: true } } } },
+        cache: true,
+      });
     }
     expect(getActivePluginRegistry()).toBe(activeRegistry);
     expect(getActivePluginRegistryKey()).toBe("startup-registry");

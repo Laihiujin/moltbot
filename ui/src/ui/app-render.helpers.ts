@@ -28,6 +28,7 @@ import type { SessionsListResult } from "./types.ts";
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
   mainKey?: string;
+  defaultAgentId?: string;
 };
 
 type SessionSwitchHost = AppViewState & {
@@ -952,6 +953,46 @@ type SessionOptionGroup = {
   options: SessionOptionEntry[];
 };
 
+type SessionOptionDefaults = {
+  mainSessionKey: string;
+  mainKey: string;
+  defaultAgentId: string;
+};
+
+function resolveSessionOptionDefaults(state: AppViewState): SessionOptionDefaults {
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  const mainSessionKey = resolveSidebarChatSessionKey(state);
+  return {
+    mainSessionKey,
+    mainKey: normalizeOptionalString(snapshot?.sessionDefaults?.mainKey) ?? "main",
+    defaultAgentId: normalizeOptionalString(snapshot?.sessionDefaults?.defaultAgentId) ?? "main",
+  };
+}
+
+function isMainSessionAlias(key: string, defaults: SessionOptionDefaults): boolean {
+  const raw = normalizeOptionalString(key) ?? "";
+  if (!raw) {
+    return false;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  const mainKey = normalizeLowercaseStringOrEmpty(defaults.mainKey);
+  const mainSessionKey = normalizeLowercaseStringOrEmpty(defaults.mainSessionKey);
+  if (normalized === "main" || normalized === mainKey || normalized === mainSessionKey) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(raw);
+  if (!parsed) {
+    return false;
+  }
+  return (
+    normalizeLowercaseStringOrEmpty(parsed.agentId) ===
+      normalizeLowercaseStringOrEmpty(defaults.defaultAgentId) &&
+    normalizeLowercaseStringOrEmpty(parsed.rest) === mainKey
+  );
+}
+
 export function resolveSessionOptionGroups(
   state: AppViewState,
   sessionKey: string,
@@ -959,12 +1000,17 @@ export function resolveSessionOptionGroups(
 ): SessionOptionGroup[] {
   const rows = sessions?.sessions ?? [];
   const hideCron = state.sessionsHideCron ?? true;
+  const defaults = resolveSessionOptionDefaults(state);
+  const mainOptionKey = isMainSessionAlias(sessionKey, defaults)
+    ? sessionKey
+    : defaults.mainSessionKey;
   const byKey = new Map<string, SessionsListResult["sessions"][number]>();
   for (const row of rows) {
     byKey.set(row.key, row);
   }
 
   const seenKeys = new Set<string>();
+  let seenMainSession = false;
   const groups = new Map<string, SessionOptionGroup>();
   const ensureGroup = (groupId: string, label: string): SessionOptionGroup => {
     const existing = groups.get(groupId);
@@ -984,25 +1030,35 @@ export function resolveSessionOptionGroups(
     if (!key || seenKeys.has(key)) {
       return;
     }
-    seenKeys.add(key);
     const row = byKey.get(key);
     const parsed = parseAgentSessionKey(key);
+    const isMainOption = isMainSessionAlias(key, defaults);
+    if (isMainOption && seenMainSession) {
+      return;
+    }
+    seenKeys.add(key);
+    if (isMainOption) {
+      seenMainSession = true;
+    }
     const group = parsed
       ? ensureGroup(
           `agent:${normalizeLowercaseStringOrEmpty(parsed.agentId)}`,
           resolveAgentGroupLabel(state, parsed.agentId),
         )
       : ensureGroup("other", "Other Sessions");
-    const scopeLabel = normalizeOptionalString(parsed?.rest) ?? key;
-    const label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
+    const scopeLabel = isMainOption ? "Main Chat" : (normalizeOptionalString(parsed?.rest) ?? key);
+    const label = isMainOption
+      ? "Main Chat"
+      : resolveSessionScopedOptionLabel(key, row, parsed?.rest);
     group.options.push({
       key,
       label,
       scopeLabel,
-      title: key,
+      title: isMainOption ? `Main chat (${key})` : key,
     });
   };
 
+  addOption(mainOptionKey);
   for (const row of rows) {
     if (row.key !== sessionKey && (row.kind === "global" || row.kind === "unknown")) {
       continue;

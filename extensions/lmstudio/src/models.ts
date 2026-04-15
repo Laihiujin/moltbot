@@ -102,20 +102,39 @@ export function resolveLoadedContextWindow(
   return contextWindow;
 }
 
-/**
- * Normalizes a server path by stripping trailing slash and inference suffixes.
- *
- * LM Studio users often copy their inference URL (e.g. "http://localhost:1234/v1") instead
- * of the server root. This function strips a trailing "/v1" or "/api/v1" so the caller always
- * receives a clean root base URL. The expected input is the server root without any API version
- * path (e.g. "http://localhost:1234").
- */
-function normalizeUrlPath(pathname: string): string {
+const LMSTUDIO_TRAILING_PATH_SUFFIXES = [
+  "/api/v1/models/load",
+  "/api/v1/models",
+  "/v1/chat/completions",
+  "/v1/responses",
+  "/v1/embeddings",
+  "/v1/models",
+  "/api/v1",
+  "/v1",
+] as const;
+
+function stripTrailingPathSuffixes(pathname: string, suffixes: readonly string[]): string {
   const trimmed = pathname.replace(/\/+$/, "");
   if (!trimmed) {
     return "";
   }
-  return trimmed.replace(/\/api\/v1$/i, "").replace(/\/v1$/i, "");
+  for (const suffix of suffixes) {
+    if (trimmed.toLowerCase().endsWith(suffix)) {
+      return trimmed.slice(0, -suffix.length);
+    }
+  }
+  return trimmed;
+}
+
+/**
+ * Normalizes a server path by stripping trailing slash and known LM Studio endpoint suffixes.
+ *
+ * LM Studio users often copy a full endpoint URL such as ".../v1", ".../api/v1", or even
+ * ".../api/v1/models" instead of the server root. This function strips those trailing endpoint
+ * suffixes so the caller always receives a clean root base URL.
+ */
+function normalizeUrlPath(pathname: string): string {
+  return stripTrailingPathSuffixes(pathname, LMSTUDIO_TRAILING_PATH_SUFFIXES);
 }
 
 function hasExplicitHttpScheme(value: string): boolean {

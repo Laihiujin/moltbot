@@ -22,7 +22,12 @@ type LifecycleHost = {
   basePath: string;
   client?: { stop: () => void } | null;
   connectGeneration: number;
+  gatewayBootstrapBusy?: boolean;
+  desktopConnectRetryTimer?: number | null;
   connected?: boolean;
+  settings?: import("./storage.ts").UiSettings;
+  gatewayAuthMode?: "none" | "token" | "password" | "trusted-proxy" | null;
+  applySettings?: (next: import("./storage.ts").UiSettings) => void;
   tab: Tab;
   assistantName: string;
   assistantAvatar: string | null;
@@ -48,11 +53,13 @@ export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
+  host.gatewayBootstrapBusy = true;
   const bootstrapReady = loadControlUiBootstrapConfig(host);
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
   window.addEventListener("popstate", host.popStateHandler);
   void bootstrapReady.finally(() => {
+    host.gatewayBootstrapBusy = false;
     if (host.connectGeneration !== connectGeneration) {
       return;
     }
@@ -73,6 +80,11 @@ export function handleFirstUpdated(host: LifecycleHost) {
 
 export function handleDisconnected(host: LifecycleHost) {
   host.connectGeneration += 1;
+  host.gatewayBootstrapBusy = false;
+  if (typeof host.desktopConnectRetryTimer === "number") {
+    window.clearTimeout(host.desktopConnectRetryTimer);
+    host.desktopConnectRetryTimer = null;
+  }
   window.removeEventListener("popstate", host.popStateHandler);
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);

@@ -230,6 +230,23 @@ describe("gateway config methods", () => {
     expect(res.payload?.schema?.properties).toBeUndefined();
   });
 
+  it("returns a section-scoped config schema payload", async () => {
+    const res = await rpcReq<{
+      schema?: { properties?: Record<string, unknown> };
+      uiHints?: Record<string, unknown>;
+    }>(requireWs(), "config.schema", {
+      sections: ["models", "agents"],
+    });
+
+    expect(res.ok).toBe(true);
+    expect(Object.keys(res.payload?.schema?.properties ?? {}).toSorted()).toEqual([
+      "agents",
+      "models",
+    ]);
+    expect(res.payload?.uiHints?.gateway).toBeUndefined();
+    expect(res.payload?.uiHints?.["models.providers"]).toBeTruthy();
+  });
+
   it("rejects config.schema.lookup when the path is missing", async () => {
     const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
       path: "gateway.notReal.path",
