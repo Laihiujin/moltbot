@@ -47,8 +47,8 @@ function resolveSignTool() {
       .filter((entry) => entry.isDirectory())
       .map((entry) => join(binRoot, entry.name, "x64", "signtool.exe"))
       .filter((candidate) => existsSync(candidate))
-      .sort()
-      .reverse();
+      .toSorted()
+      .toReversed();
 
     if (versionCandidates[0]) {
       return versionCandidates[0];

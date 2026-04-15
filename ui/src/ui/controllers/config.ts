@@ -48,7 +48,12 @@ function isSchemaObject(value: unknown): value is Record<string, unknown> {
 }
 
 function isUnsupportedSectionsError(error: unknown): boolean {
-  const message = String(error ?? "");
+  const message =
+    typeof error === "string"
+      ? error
+      : error instanceof Error && typeof error.message === "string"
+        ? error.message
+        : "";
   return (
     message.includes("config.schema") &&
     message.includes("sections") &&
@@ -113,9 +118,10 @@ async function requestConfigSchema(
     new Set(options?.sections?.map((entry) => entry.trim()).filter(Boolean) ?? []),
   );
   try {
-    return await client.request<ConfigSchemaResponse>("config.schema", {
-      ...(sections.length ? { sections } : {}),
-    });
+    return await client.request<ConfigSchemaResponse>(
+      "config.schema",
+      sections.length ? { sections } : {},
+    );
   } catch (error) {
     if (sections.length > 0 && isUnsupportedSectionsError(error)) {
       return client.request<ConfigSchemaResponse>("config.schema", {});
@@ -145,8 +151,7 @@ async function requestConfigSchema(
 function buildConfigSchemaCacheKey(options?: LoadConfigSchemaOptions): string {
   const sections = Array.from(
     new Set(options?.sections?.map((entry) => entry.trim()).filter(Boolean) ?? []),
-  )
-    .toSorted((a, b) => a.localeCompare(b));
+  ).toSorted((a, b) => a.localeCompare(b));
   return sections.length > 0 ? `sections:${sections.join(",")}` : "full";
 }
 
