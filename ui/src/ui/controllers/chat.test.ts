@@ -826,7 +826,7 @@ describe("loadChatHistory", () => {
   it("preserves optimistic local messages while a run is active", async () => {
     const optimisticUserMessage = {
       role: "user",
-      content: [{ type: "text", text: "帮我接入 iMessage" }],
+      content: [{ type: "text", text: "Please enable the local channel" }],
       timestamp: 1_710_000_000_000,
     };
     const request = vi.fn().mockResolvedValue({
@@ -855,13 +855,11 @@ describe("loadChatHistory", () => {
   it("preserves a recent local user message after run state clears", async () => {
     const optimisticUserMessage = {
       role: "user",
-      content: [{ type: "text", text: "你的权限满么？帮我接入 iMessage" }],
+      content: [{ type: "text", text: "Please keep this local message visible" }],
       timestamp: Date.now(),
     };
     const request = vi.fn().mockResolvedValue({
-      messages: [
-        { role: "assistant", content: [{ type: "text", text: "旧回复" }], timestamp: 10 },
-      ],
+      messages: [{ role: "assistant", content: [{ type: "text", text: "旧回复" }], timestamp: 10 }],
       thinkingLevel: "adaptive",
     });
     const state = createState({
